@@ -1,0 +1,4 @@
+# local test artifacts
+*.log
+*.DS_Store
+run/

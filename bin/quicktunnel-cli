@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# quicktunnel-cli — manage the Xray + Cloudflare Tunnel service.
+set -uo pipefail
+
+QT_PREFIX="${QT_PREFIX:-/usr/local/quicktunnel}"
+for f in common deps config qr service; do
+  # shellcheck disable=SC1090
+  . "$QT_PREFIX/lib/$f.sh" 2>/dev/null || { echo "quicktunnel is not installed at $QT_PREFIX" >&2; exit 1; }
+done
+
+usage() {
+  cat <<USAGE
+${C_BOLD}quicktunnel-cli${C_RESET} — Xray (VLESS/WS) behind a Cloudflare Tunnel
+
+${C_BOLD}usage:${C_RESET} quicktunnel-cli <command>
+
+  ${C_BOLD}status${C_RESET}         service state, mode, current hostname
+  ${C_BOLD}start${C_RESET}          start the service
+  ${C_BOLD}stop${C_RESET}           stop the service
+  ${C_BOLD}restart${C_RESET}        restart (quick mode: gets a NEW hostname)
+  ${C_BOLD}link${C_RESET}           print the vless:// share URI
+  ${C_BOLD}qr${C_RESET}             print the URI as a scannable QR code
+  ${C_BOLD}client${C_RESET}         print the client config JSON
+  ${C_BOLD}log${C_RESET} [-f] [what]  show logs (what: daemon|xray|tunnel|access|error)
+  ${C_BOLD}config${C_RESET}         show the current settings
+  ${C_BOLD}reconfigure${C_RESET}    re-run the setup wizard
+  ${C_BOLD}update${C_RESET}         update xray and cloudflared to the latest release
+  ${C_BOLD}uninstall${C_RESET}      remove the service and $QT_PREFIX
+  ${C_BOLD}version${C_RESET}        show component versions
+
+Root is required for everything except version/help, because the config
+holds the client credential and is mode 600.
+USAGE
+}
+
+need_conf() {
+  [ -r "$QT_CONF" ] || die "cannot read $QT_CONF (try: sudo quicktunnel-cli $*)"
+  qt_load_conf
+}
+
+cmd_status() {
+  need_conf status
+  local host state
+  host="$(cat "$QT_RUN/hostname" 2>/dev/null || echo '-')"
+  # run.sh removes the hostname file on exit, so its presence means the
+  # supervisor is alive even when no service manager owns it (--no-service).
+  if qt_service_running; then
+    state="${C_GREEN}running${C_RESET}"
+  elif [ "$host" != - ]; then
+    state="${C_GREEN}running${C_RESET} ${C_DIM}(not under a service manager)${C_RESET}"
+  else
+    state="${C_RED}stopped${C_RESET}"
+  fi
+  log ""
+  printf '  %-12s %b\n' service "$state"
+  printf '  %-12s %s\n' mode "$QT_MODE"
+  printf '  %-12s %s\n' remark "${QT_REMARK:-quicktunnel}"
+  printf '  %-12s %s\n' hostname "$host"
+  printf '  %-12s 127.0.0.1:%s\n' origin "$QT_PORT"
+  printf '  %-12s %s\n' "ws path" "$QT_WSPATH"
+  printf '  %-12s %ss\n' heartbeat "$QT_HEARTBEAT"
+  printf '  %-12s %s\n' prefix "$QT_PREFIX"
+  log ""
+  if [ "$QT_MODE" = quick ] && [ "$host" != - ]; then
+    printf '  %sthis hostname changes on every restart%s\n\n' "$C_DIM" "$C_RESET"
+  fi
+}
+
+cmd_link() {
+  need_conf link
+  local host
+  host="$(cat "$QT_RUN/hostname" 2>/dev/null || true)"
+  [ -n "$host" ] || die "no active link — is the service running?"
+  # --full re-emits the URI with the redundant sni/host params spelled out, for
+  # the rare client that does not default them to the address.
+  if [ "${1:-}" = --full ]; then qt_build_link "$host" full; printf '\n'; else head -1 "$QT_RUN/link.txt"; fi
+}
+cmd_qr()   { need_conf qr; qt_show_link_and_qr; }
+cmd_client(){ need_conf client; [ -r "$QT_ETC/client.json" ] || die "no client config yet"; cat "$QT_ETC/client.json"; }
+
+cmd_start()   { need_root; need_conf start;   qt_service_start;   ok "started";   sleep 3; cmd_status; }
+cmd_stop()    { need_root; need_conf stop;    qt_service_stop;    ok "stopped"; }
+cmd_restart() { need_root; need_conf restart; qt_service_restart; ok "restarted"; sleep 4; cmd_status; }
+
+cmd_log() {
+  need_conf log
+  local follow='' what=daemon f
+  for a in "$@"; do
+    case "$a" in
+      -f|--follow) follow=1 ;;
+      daemon|xray|tunnel|access|error) what="$a" ;;
+    esac
+  done
+  case "$what" in
+    daemon) f="$QT_LOG/daemon.log" ;;
+    xray)   f="$QT_LOG/xray.log" ;;
+    tunnel) f="$QT_LOG/tunnel.log" ;;
+    access) f="$QT_LOG/access.log" ;;
+    error)  f="$QT_LOG/error.log" ;;
+  esac
+  if [ ! -f "$f" ]; then
+    # systemd captures stdout itself, so the daemon log may only live in the journal.
+    if [ "$what" = daemon ] && [ "$(qt_service_kind)" = systemd ]; then
+      if [ -n "$follow" ]; then journalctl -u "$QT_SERVICE_NAME" -f
+      else journalctl -u "$QT_SERVICE_NAME" -n 50 --no-pager; fi
+      return
+    fi
+    die "no log at $f"
+  fi
+  if [ -n "$follow" ]; then tail -f "$f"; else tail -n 50 "$f"; fi
+}
+
+cmd_config() {
+  need_conf config
+  log ""
+  sed 's/^/  /' "$QT_CONF"
+  log ""
+  printf '  %sedit with: sudo quicktunnel-cli reconfigure%s\n\n' "$C_DIM" "$C_RESET"
+}
+
+cmd_reconfigure() {
+  need_write "$QT_CONF"
+  # wizard.sh is sourced, not executed, so it is installed 0644 — test -r not -x.
+  [ -r "$QT_LIB/wizard.sh" ] || die "wizard not installed at $QT_LIB/wizard.sh"
+  # shellcheck disable=SC1091
+  . "$QT_LIB/wizard.sh"
+  qt_load_conf 2>/dev/null || true
+  qt_wizard
+  qt_save_conf
+  qt_gen_server
+  # Refresh the cached client config and URI so `link`/`qr` do not keep serving
+  # the pre-reconfigure remark while the tunnel hostname is unchanged.
+  local host
+  host="$(cat "$QT_RUN/hostname" 2>/dev/null || true)"
+  if [ -n "$host" ]; then qt_gen_client "$host"; qt_write_state "$host"; fi
+  ok "configuration saved"
+  # The remark and URI are already refreshed above; port/UUID/path changes need
+  # the server itself to restart, which only a service manager can do for us.
+  if qt_service_running; then
+    info "restarting to apply"
+    qt_service_restart; sleep 4; cmd_status
+  elif qt_self_running; then
+    warn "quicktunnel is running outside a service manager — restart it yourself to apply server-side changes"
+  fi
+}
+
+cmd_update() {
+  need_write "$QT_BIN"; need_conf update
+  local was=0
+  qt_service_running && was=1
+  [ "$was" -eq 1 ] && { info "stopping service"; qt_service_stop; }
+  qt_need_tools
+  qt_fetch_xray
+  qt_fetch_cloudflared
+  [ "$was" -eq 1 ] && { info "starting service"; qt_service_start; sleep 3; cmd_status; }
+  ok "update complete"
+}
+
+cmd_uninstall() {
+  need_root
+  printf '%sThis removes the service and everything under %s.%s\n' "$C_YELLOW" "$QT_PREFIX" "$C_RESET"
+  ask_yn "Really uninstall?" n || { log "cancelled"; return 0; }
+  qt_service_uninstall
+  rm -f /usr/local/bin/quicktunnel-cli
+  rm -rf "$QT_PREFIX"
+  ok "uninstalled"
+}
+
+cmd_version() {
+  local xv
+  xv="$(cat "$QT_BIN/.xray-version" 2>/dev/null || echo '?')"
+  printf '  xray         %s\n' "$xv"
+  printf '  cloudflared  %s\n' "$("$QT_BIN/cloudflared" --version 2>/dev/null | head -1 || echo '?')"
+  printf '  qrencode     %s\n' "$(qrencode --version 2>&1 | head -1 || echo 'not installed')"
+}
+
+case "${1:-help}" in
+  status) cmd_status ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_restart ;;
+  link) shift; cmd_link "$@" ;;
+  qr) cmd_qr ;;
+  client) cmd_client ;;
+  log|logs) shift; cmd_log "$@" ;;
+  config) cmd_config ;;
+  reconfigure|config-edit) cmd_reconfigure ;;
+  update) cmd_update ;;
+  uninstall) cmd_uninstall ;;
+  version|--version|-v) cmd_version ;;
+  help|--help|-h) usage ;;
+  *) warn "unknown command: $1"; log ""; usage; exit 1 ;;
+esac

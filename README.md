@@ -1,6 +1,6 @@
 **English** · [فارسی](README.fa.md) · [简体中文](README.zh.md)
 
-# quicktunnel
+# quicktunnel - [try.cloudflare.com](https://try.cloudflare.com)
 
 Runs an Xray **VLESS over WebSocket** server behind a **Cloudflare Tunnel**, so a
 machine with no public IP and no open inbound ports is reachable over `443` at a

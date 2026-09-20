@@ -1,3 +1,5 @@
+**English** · [فارسی](README.fa.md) · [简体中文](README.zh.md)
+
 # quicktunnel
 
 Runs an Xray **VLESS over WebSocket** server behind a **Cloudflare Tunnel**, so a
@@ -13,19 +15,27 @@ client ──TLS/WS:443──▶ Cloudflare edge ──▶ cloudflared ──▶
 
 ## Install
 
-```bash
-sudo ./install.sh
-```
-
-Interactive by default: it asks for the mode, ports, UUID, WebSocket path and
-heartbeat, showing current values as defaults so Enter-through is safe.
-
-Non-interactive:
+One command, no clone needed:
 
 ```bash
-sudo ./install.sh --yes
-sudo ./install.sh --mode named --hostname proxy.example.com --tunnel-name xray --yes
+bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh)
 ```
+
+Interactive by default: it asks for the mode, ports, UUID, WebSocket path,
+remark and heartbeat, showing current values as defaults so Enter-through is
+safe.
+
+Non-interactive — arguments go straight on the end:
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) --yes
+bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) \
+  --mode named --hostname proxy.example.com --tunnel-name xray --yes
+```
+
+`install.sh` bootstraps itself: run without the repo beside it, it fetches the
+tree into a temp dir, hands off, and cleans up. From a clone `sudo ./install.sh`
+still works unchanged. `QT_REF=v1.0.0` pins a tag or commit instead of `main`.
 
 | flag | meaning |
 |---|---|
@@ -79,24 +89,6 @@ quicktunnel-cli uninstall
 
 Most commands need `sudo`: the config holds the client credential and is mode `600`.
 
-## The share URI
-
-The URI omits `sni=` and `host=`. Both would equal the address, and Xray
-already falls back that way — `wsSettings.Host` -> `tlsSettings.ServerName` ->
-destination address in `websocket/dialer.go`, and an empty `ServerName` is set
-to the destination address in `tls/config.go`. Dropping them removes three
-copies of a ~40-character hostname:
-
-```
-341 chars -> 195 chars      QR: 56x33 -> 47x27 characters
-```
-
-which is what makes the QR comfortably scannable in a terminal. `link --full`
-emits the explicit form for any client that does not default them.
-
-The remark (`--remark`, default `quicktunnel`) becomes the URI fragment and the
-config name in client apps.
-
 ## Why WebSocket only
 
 A Cloudflare Tunnel is an HTTP proxy, which rules out most Xray transports.
@@ -105,14 +97,6 @@ Measured against a live quick tunnel:
 | transport | result | why |
 |---|---|---|
 | `ws` | **works** | 101 upgrade to a raw bidirectional pipe, passed through untouched |
-| `xhttp` | fails | the edge buffers whole response bodies, so the downlink never streams |
-| `httpupgrade` | fails | Xray omits `Sec-WebSocket-Key`, so the edge rejects the handshake |
-| raw/Reality/Vision, mKCP, QUIC | impossible | TLS terminates at the edge; HTTP(S) on 80/443 only |
-
-The XHTTP result was isolated with a plain SSE origin: chunks emitted 1s apart
-at the origin arrived at the client **all at once**, after the response closed.
-Xray logs a deprecation warning steering you from `ws` to XHTTP — ignore it
-here, since XHTTP is exactly what this path cannot carry.
 
 Three settings in the generated configs are load-bearing:
 

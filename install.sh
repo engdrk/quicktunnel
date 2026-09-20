@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # quicktunnel installer — Xray (VLESS/WebSocket) behind a Cloudflare Tunnel.
 #
+# One-liner (no clone needed):
+#   bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh)
+#
+# From a clone:
 #   sudo ./install.sh                 interactive
 #   sudo ./install.sh --yes           non-interactive, defaults
 #   sudo ./install.sh --mode named --hostname proxy.example.com --tunnel-name xray --yes
@@ -9,8 +13,72 @@
 # managed afterwards with `quicktunnel-cli`.
 set -uo pipefail
 
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SRC=''
 QT_PREFIX="${QT_PREFIX:-/usr/local/quicktunnel}"
+
+QT_REPO="${QT_REPO:-hossinasaadi/quicktunnel}"
+QT_REF="${QT_REF:-main}"
+
+# ---------------------------------------------------------------- bootstrap ---
+# Run as `bash <(curl -Ls .../install.sh)` this script is /dev/fd/63 with no
+# lib/ beside it, so fetch the repo and hand off to the unpacked copy. From a
+# clone lib/ is present and this block is skipped. QT_BOOTSTRAPPED guards
+# against looping on a malformed archive.
+if [ -z "${QT_BOOTSTRAPPED:-}" ] && { [ -z "$SRC" ] || [ ! -f "$SRC/lib/common.sh" ]; }; then
+  _b_die() { printf 'fail %s\n' "$*" >&2; exit 1; }
+  for _t in curl tar; do
+    command -v "$_t" >/dev/null 2>&1 || _b_die "missing required tool: $_t"
+  done
+
+  printf '\n  quicktunnel installer\n  source: github.com/%s @ %s\n\n' "$QT_REPO" "$QT_REF"
+
+  _tmp="$(mktemp -d)"
+  # Not exec below, so this trap still runs and the unpacked tree is removed.
+  trap 'rm -rf "$_tmp"' EXIT
+
+  printf '==> fetching %s@%s\n' "$QT_REPO" "$QT_REF"
+  curl -fsSL "https://codeload.github.com/$QT_REPO/tar.gz/$QT_REF" \
+    | tar -xz -C "$_tmp" --strip-components=1 \
+    || _b_die "could not download $QT_REPO@$QT_REF — check the repo name and ref"
+  [ -f "$_tmp/lib/common.sh" ] || _b_die "archive is missing lib/ — wrong repo or ref?"
+  chmod +x "$_tmp/install.sh" "$_tmp/lib/run.sh" 2>/dev/null || true
+
+  # Elevate only the install itself. Mirrors the rule further down: a
+  # --no-service install into a writable prefix needs no privileges, so do not
+  # ask for a password it will never use.
+  _run=(bash)
+  if [ "$(id -u)" -ne 0 ]; then
+    _need_root=1
+    case " $* " in
+      *" --no-service "*)
+        _prefix="$QT_PREFIX"; _prev=''
+        for _a in "$@"; do [ "$_prev" = --prefix ] && _prefix="$_a"; _prev="$_a"; done
+        if mkdir -p "$_prefix" 2>/dev/null && [ -w "$_prefix" ]; then _need_root=0; fi ;;
+    esac
+    if [ "$_need_root" -eq 1 ]; then
+      command -v sudo >/dev/null 2>&1 || _b_die "this needs root and sudo is not available"
+      # -E so QT_BOOTSTRAPPED and QT_PREFIX survive into the elevated run.
+      _run=(sudo -E bash)
+    fi
+  fi
+
+  # `bash <(curl ...)` keeps a real tty on stdin and needs nothing. Under
+  # `curl ... | bash` stdin is the spent pipe the script arrived on, so point it
+  # back at the terminal. The probe opens /dev/tty rather than testing -r: under
+  # CI, cron or a daemon the node exists and passes -r but opening fails ENXIO.
+  if [ -t 0 ]; then
+    QT_BOOTSTRAPPED=1 "${_run[@]}" "$_tmp/install.sh" "$@"
+  elif ( : < /dev/tty ) 2>/dev/null; then
+    QT_BOOTSTRAPPED=1 "${_run[@]}" "$_tmp/install.sh" "$@" < /dev/tty
+  else
+    case " $* " in
+      *" --yes "*|*" -y "*) ;;
+      *) _b_die "no terminal available for the setup wizard — re-run with --yes" ;;
+    esac
+    QT_BOOTSTRAPPED=1 "${_run[@]}" "$_tmp/install.sh" "$@"
+  fi
+  exit $?
+fi
 
 # shellcheck disable=SC1091
 . "$SRC/lib/common.sh"

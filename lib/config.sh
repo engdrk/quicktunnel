@@ -245,14 +245,16 @@ qt_notify_links() {
   [ -n "${QT_TG_TOKEN:-}" ] && [ -n "${QT_TG_CHAT:-}" ] && [ -s "$QT_RUN/links.tsv" ] || return 0
   sum="$(cksum < "$QT_RUN/links.tsv")"
   [ "$(cat "$sent" 2>/dev/null)" = "$sum" ] && return 0
+  [ -n "${QT_NOTIFY_PID:-}" ] && kill -0 "$QT_NOTIFY_PID" 2>/dev/null && return 0
   (
     if qt_tg_send "$(qt_links_message "$host" "$reason")"; then
       printf '%s' "$sum" > "$sent"
       printf '%s telegram: links sent\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     else
-      printf '%s telegram: send failed (will retry on next change or: quicktunnel-cli notify send)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+      printf '%s telegram: send failed, retrying in 60s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     fi
   ) &
+  QT_NOTIFY_PID=$!
 }
 
 qt_write_links() {

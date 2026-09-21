@@ -44,6 +44,8 @@ reload_xray() {
   RELOAD=0
   local next="$QT_RUN/server.next.json"
   log "$(stamp) reload requested"
+  # shellcheck disable=SC1091
+  . "$QT_LIB/common.sh"; . "$QT_LIB/deps.sh"; . "$QT_LIB/config.sh"
   qt_load_conf
   if ! qt_gen_server "$next" || ! "$XRAY_BIN" run -test -c "$next" >>"$QT_LOG/xray.log" 2>&1; then
     rm -f "$next"

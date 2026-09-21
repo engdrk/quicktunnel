@@ -83,6 +83,7 @@ qt_load_conf() {
   QT_SUB_TOKEN="${QT_SUB_TOKEN:-}"
   QT_SUB_GIST="${QT_SUB_GIST:-}"
   QT_SUB_URL="${QT_SUB_URL:-}"
+  QT_ACCESS_LOG="${QT_ACCESS_LOG:-off}"
 }
 
 qt_save_conf() {
@@ -92,7 +93,7 @@ qt_save_conf() {
   {
     printf '# quicktunnel configuration — generated %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     for k in QT_MODE QT_PORT QT_SOCKS_PORT QT_UUID QT_WSPATH QT_REMARK QT_HEARTBEAT QT_METRICS \
-             QT_HOSTNAME QT_TUNNEL_NAME QT_TUNNEL_TOKEN QT_TG_TOKEN QT_TG_CHAT QT_SUB_TOKEN QT_SUB_GIST QT_SUB_URL; do
+             QT_HOSTNAME QT_TUNNEL_NAME QT_TUNNEL_TOKEN QT_TG_TOKEN QT_TG_CHAT QT_SUB_TOKEN QT_SUB_GIST QT_SUB_URL QT_ACCESS_LOG; do
       printf '%s=%q\n' "$k" "${!k:-}"
     done
   } > "$QT_CONF"

@@ -193,6 +193,19 @@ Three settings in the generated configs are load-bearing:
   **header names**, not IPs. Without it Xray logs a warning per connection and
   attributes every client to `127.0.0.1`.
 
+## Privacy defaults
+
+- The Xray access log is **off** (`access: none`): it would otherwise record
+  each client's real IP next to every destination. Set `QT_ACCESS_LOG=on` in
+  `etc/quicktunnel.conf` and `quicktunnel-cli reload` to enable it for debugging.
+  Addresses in the error log are masked.
+- The direct route resolves over DoH (`1.1.1.1`, `8.8.8.8`) with `ForceIP`, so
+  lookups never go out as plaintext port-53 traffic and never pick up the host's
+  DNS search suffix; a name that does not resolve fails instead of falling back
+  to the system resolver.
+- Exits receive domain names unresolved (`domainStrategy: AsIs`), so each exit
+  server does its own DNS — this host never looks up exit traffic.
+
 Do not use the resulting source IP for access control: Cloudflare *appends* to a
 client-supplied `X-Forwarded-For` and Xray reads the leftmost value, so it is
 forgeable. It is fine for logging.

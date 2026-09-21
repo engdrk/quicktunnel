@@ -74,10 +74,15 @@ qt_vless_outbound() {
       }'
 }
 
+qt_access_log_target() {
+  if [ "${QT_ACCESS_LOG:-off}" = on ]; then printf '%s' "$QT_LOG/access.log"; else printf 'none'; fi
+}
+
 qt_server_base_json() {
   cat <<JSON
 {
-  "log": { "loglevel": "warning", "access": "$QT_LOG/access.log", "error": "$QT_LOG/error.log" },
+  "log": { "loglevel": "warning", "access": "$(qt_access_log_target)", "error": "$QT_LOG/error.log", "maskAddress": "quarter" },
+  "dns": { "servers": ["https+local://1.1.1.1/dns-query", "https+local://8.8.8.8/dns-query"], "queryStrategy": "UseIP" },
   "inbounds": [{
     "tag": "in-ws",
     "listen": "127.0.0.1",
@@ -91,7 +96,7 @@ qt_server_base_json() {
       "sockopt": { "trustedXForwardedFor": ["CF-Connecting-IP"] }
     }
   }],
-  "outbounds": [{ "protocol": "freedom", "tag": "direct" }]
+  "outbounds": [{ "protocol": "freedom", "tag": "direct", "settings": { "domainStrategy": "ForceIP" } }]
 }
 JSON
 }

@@ -35,8 +35,13 @@ qt_wizard() {
     2) QT_MODE=named ;;
   esac
 
-  if [ "$QT_MODE" = named ]; then
+  if [ "$QT_MODE" = named ] && [ -n "${QT_TUNNEL_TOKEN:-}" ]; then
     log ""
+    printf '  %sremotely-managed tunnel %s -> %s (change with: quicktunnel-cli cloudflare <hostname>)%s\n' \
+      "$C_DIM" "$QT_TUNNEL_NAME" "$QT_HOSTNAME" "$C_RESET"
+  elif [ "$QT_MODE" = named ]; then
+    log ""
+    printf '  %sOr skip all of this: quicktunnel-cli cloudflare <hostname> sets it up via the API.%s\n' "$C_DIM" "$C_RESET"
     printf '  %sBefore this works, run once:%s\n' "$C_DIM" "$C_RESET"
     printf '    cloudflared tunnel login\n'
     printf '    cloudflared tunnel create <name>\n'
@@ -47,6 +52,7 @@ qt_wizard() {
   else
     QT_HOSTNAME=''
     QT_TUNNEL_NAME=''
+    QT_TUNNEL_TOKEN=''
   fi
 
   log ""

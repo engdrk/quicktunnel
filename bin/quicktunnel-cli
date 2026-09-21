@@ -27,6 +27,7 @@ ${C_BOLD}usage:${C_RESET} quicktunnel-cli <command>
   ${C_BOLD}exits rm${C_RESET} <name>  remove an exit
   ${C_BOLD}reload${C_RESET}         re-apply exits by restarting xray only (hostname kept)
   ${C_BOLD}test${C_RESET} [exit]    connect through the tunnel and report each exit IP
+  ${C_BOLD}cloudflare${C_RESET} <host> [name]  fixed hostname via the Cloudflare API (CF_API_TOKEN)
   ${C_BOLD}log${C_RESET} [-f] [what]  show logs (what: daemon|xray|tunnel|access|error)
   ${C_BOLD}config${C_RESET}         show the current settings
   ${C_BOLD}reconfigure${C_RESET}    re-run the setup wizard
@@ -249,6 +250,93 @@ cmd_reload() {
   cmd_links
 }
 
+CF_API="https://api.cloudflare.com/client/v4"
+
+cf() {
+  local method="$1" path="$2" body="${3:-}" out
+  if [ -n "$body" ]; then
+    out="$(curl -sS --max-time 30 -X "$method" "$CF_API$path" -H "Authorization: Bearer $CF_API_TOKEN" \
+      -H 'Content-Type: application/json' --data "$body")" || die "cloudflare API unreachable ($method $path)"
+  else
+    out="$(curl -sS --max-time 30 -X "$method" "$CF_API$path" -H "Authorization: Bearer $CF_API_TOKEN")" \
+      || die "cloudflare API unreachable ($method $path)"
+  fi
+  if ! printf '%s' "$out" | jq -e '.success == true' >/dev/null 2>&1; then
+    die "cloudflare API $method $path: $(printf '%s' "$out" | jq -r '[.errors[]? | "\(.code) \(.message)"] | join("; ")' 2>/dev/null || printf '%s' "$out" | head -c 300)"
+  fi
+  printf '%s' "$out"
+}
+
+cf_find_zone() {
+  local name="$1" out
+  while [[ "$name" == *.* ]]; do
+    out="$(cf GET "/zones?name=$name")"
+    if [ "$(printf '%s' "$out" | jq '.result | length')" -gt 0 ]; then
+      printf '%s' "$out" | jq -r '.result[0] | [.id, .account.id, .name] | @tsv'
+      return 0
+    fi
+    name="${name#*.}"
+  done
+  return 1
+}
+
+cmd_cloudflare() {
+  need_root; need_conf cloudflare; need_jq
+  local host="${1:-}" tname="${2:-}" zone_id acct_id zone_name tid rec rec_id body token
+  valid_host "$host" >/dev/null 2>&1 || die "usage: CF_API_TOKEN=… quicktunnel-cli cloudflare <hostname> [tunnel-name]"
+  if [ -z "${CF_API_TOKEN:-}" ]; then
+    printf '%sCloudflare API token%s (Zone:Read, DNS:Edit, Account/Cloudflare Tunnel:Edit): ' "$C_BOLD" "$C_RESET" >&2
+    read -rs CF_API_TOKEN; printf '\n' >&2
+  fi
+  [ -n "$CF_API_TOKEN" ] || die "no API token"
+  tname="${tname:-qt-${host%%.*}}"
+
+  info "resolving zone for $host"
+  IFS=$'\t' read -r zone_id acct_id zone_name < <(cf_find_zone "$host") || true
+  [ -n "${zone_id:-}" ] || die "no zone in this account covers $host (token needs Zone:Read on it)"
+  ok "zone $zone_name"
+
+  tid="$(cf GET "/accounts/$acct_id/cfd_tunnel?name=$tname&is_deleted=false" | jq -r '.result[0].id // empty')"
+  if [ -n "$tid" ]; then
+    ok "reusing tunnel $tname ($tid)"
+  else
+    tid="$(cf POST "/accounts/$acct_id/cfd_tunnel" "$(jq -nc --arg n "$tname" '{name: $n, config_src: "cloudflare"}')" | jq -r '.result.id')"
+    ok "created tunnel $tname ($tid)"
+  fi
+
+  body="$(jq -nc --arg h "$host" --arg s "http://127.0.0.1:$QT_PORT" \
+    '{config: {ingress: [{hostname: $h, service: $s, originRequest: {}}, {service: "http_status:404"}]}}')"
+  cf PUT "/accounts/$acct_id/cfd_tunnel/$tid/configurations" "$body" >/dev/null
+  ok "ingress $host -> 127.0.0.1:$QT_PORT"
+
+  body="$(jq -nc --arg n "$host" --arg c "$tid.cfargotunnel.com" '{type: "CNAME", name: $n, content: $c, proxied: true, ttl: 1}')"
+  rec="$(cf GET "/zones/$zone_id/dns_records?name=$host")"
+  rec_id="$(printf '%s' "$rec" | jq -r '.result[0].id // empty')"
+  if [ -n "$rec_id" ]; then
+    [ "$(printf '%s' "$rec" | jq -r '.result[0].type')" = CNAME ] \
+      || die "$host already has a $(printf '%s' "$rec" | jq -r '.result[0].type') record — remove it or pick another hostname"
+    cf PUT "/zones/$zone_id/dns_records/$rec_id" "$body" >/dev/null
+  else
+    cf POST "/zones/$zone_id/dns_records" "$body" >/dev/null
+  fi
+  ok "DNS $host -> $tid.cfargotunnel.com (proxied)"
+
+  token="$(cf GET "/accounts/$acct_id/cfd_tunnel/$tid/token" | jq -r '.result')"
+  [ -n "$token" ] && [ "$token" != null ] || die "could not fetch the tunnel token"
+
+  QT_MODE=named; QT_HOSTNAME="$host"; QT_TUNNEL_NAME="$tname"; QT_TUNNEL_TOKEN="$token"
+  qt_save_conf
+  ok "saved: named mode, fixed hostname $host"
+  if qt_service_running; then
+    info "restarting onto the named tunnel"
+    qt_service_restart
+    for _ in $(seq 1 30); do [ "$(cat "$QT_RUN/hostname" 2>/dev/null)" = "$host" ] && break; sleep 1; done
+    cmd_links
+  else
+    warn "service not running — start it with: quicktunnel-cli start"
+  fi
+}
+
 cmd_test() {
   need_root; need_conf test
   command -v jq >/dev/null 2>&1 || die "jq is required"
@@ -389,6 +477,7 @@ case "${1:-help}" in
   exits|exit) shift; cmd_exits "$@" ;;
   reload) cmd_reload ;;
   test) shift; cmd_test "$@" ;;
+  cloudflare|cf) shift; cmd_cloudflare "$@" ;;
   client) cmd_client ;;
   log|logs) shift; cmd_log "$@" ;;
   config) cmd_config ;;

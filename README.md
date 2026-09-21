@@ -72,6 +72,20 @@ cloudflared tunnel route dns xray proxy.example.com
 Then install with `--mode named --hostname proxy.example.com --tunnel-name xray`.
 The URI and QR stay valid across restarts.
 
+**named via the API** — no `cloudflared login`, no cert file. With an API token
+scoped to *Zone:Read*, *DNS:Edit* (the zone) and *Cloudflare Tunnel:Edit*
+(the account):
+
+```bash
+CF_API_TOKEN=… quicktunnel-cli cloudflare proxy.example.com
+```
+
+It creates (or reuses) a remotely-managed tunnel, points its ingress at the
+local xray port, upserts a proxied CNAME to `<tunnel-id>.cfargotunnel.com`,
+stores the tunnel token and switches the service over. UUIDs, path and exits are
+unchanged, so only the hostname in client links changes — once. Omit
+`CF_API_TOKEN` to be prompted for it; the API token itself is never saved.
+
 ## Managing it
 
 ```bash

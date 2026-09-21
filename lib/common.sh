@@ -77,24 +77,20 @@ qt_load_conf() {
   # Defaults for keys added after an install, so upgrading does not break
   # on `set -u` when an older config file lacks them.
   QT_REMARK="${QT_REMARK:-quicktunnel}"
+  QT_TUNNEL_TOKEN="${QT_TUNNEL_TOKEN:-}"
 }
 
 qt_save_conf() {
+  local k
   mkdir -p "$QT_ETC"
   umask 077
-  cat > "$QT_CONF" <<CONF
-# quicktunnel configuration — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')
-QT_MODE=${QT_MODE}
-QT_PORT=${QT_PORT}
-QT_SOCKS_PORT=${QT_SOCKS_PORT}
-QT_UUID=${QT_UUID}
-QT_WSPATH=${QT_WSPATH}
-QT_REMARK=${QT_REMARK}
-QT_HEARTBEAT=${QT_HEARTBEAT}
-QT_METRICS=${QT_METRICS}
-QT_HOSTNAME=${QT_HOSTNAME:-}
-QT_TUNNEL_NAME=${QT_TUNNEL_NAME:-}
-CONF
+  {
+    printf '# quicktunnel configuration — generated %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    for k in QT_MODE QT_PORT QT_SOCKS_PORT QT_UUID QT_WSPATH QT_REMARK QT_HEARTBEAT QT_METRICS \
+             QT_HOSTNAME QT_TUNNEL_NAME QT_TUNNEL_TOKEN; do
+      printf '%s=%q\n' "$k" "${!k:-}"
+    done
+  } > "$QT_CONF"
   chmod 600 "$QT_CONF"
 }
 

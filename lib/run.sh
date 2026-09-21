@@ -64,7 +64,13 @@ qt_gen_server
 log "$(stamp) starting xray on 127.0.0.1:$QT_PORT"
 start_xray
 
-if [ "$QT_MODE" = named ]; then
+if [ "$QT_MODE" = named ] && [ -n "$QT_TUNNEL_TOKEN" ]; then
+  log "$(stamp) starting remotely-managed tunnel '$QT_TUNNEL_NAME' -> $QT_HOSTNAME"
+  TUNNEL_TOKEN="$QT_TUNNEL_TOKEN" "$CFD_BIN" tunnel --no-autoupdate \
+    --metrics "$QT_METRICS" run >>"$QT_LOG/tunnel.log" 2>&1 &
+  CFD_PID=$!
+  HOST="$QT_HOSTNAME"
+elif [ "$QT_MODE" = named ]; then
   log "$(date -u '+%Y-%m-%dT%H:%M:%SZ') starting named tunnel '$QT_TUNNEL_NAME' -> $QT_HOSTNAME"
   "$CFD_BIN" tunnel --no-autoupdate --url "http://127.0.0.1:$QT_PORT" \
     --metrics "$QT_METRICS" run "$QT_TUNNEL_NAME" >>"$QT_LOG/tunnel.log" 2>&1 &

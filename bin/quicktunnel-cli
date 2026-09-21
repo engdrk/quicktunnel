@@ -18,9 +18,15 @@ ${C_BOLD}usage:${C_RESET} quicktunnel-cli <command>
   ${C_BOLD}start${C_RESET}          start the service
   ${C_BOLD}stop${C_RESET}           stop the service
   ${C_BOLD}restart${C_RESET}        restart (quick mode: gets a NEW hostname)
-  ${C_BOLD}link${C_RESET}           print the vless:// share URI
-  ${C_BOLD}qr${C_RESET}             print the URI as a scannable QR code
-  ${C_BOLD}client${C_RESET}         print the client config JSON
+  ${C_BOLD}link${C_RESET} [exit] [--full]  print the vless:// share URI (default or one exit)
+  ${C_BOLD}links${C_RESET}          print every URI with its client SOCKS port
+  ${C_BOLD}qr${C_RESET} [exit]      print the URI as a scannable QR code
+  ${C_BOLD}client${C_RESET}         print the client config JSON (one SOCKS port per exit)
+  ${C_BOLD}exits${C_RESET}          list exit outbounds
+  ${C_BOLD}exits add${C_RESET} <name> <vless://…|file|-> [--port N]   add an exit (share link or outbound JSON)
+  ${C_BOLD}exits rm${C_RESET} <name>  remove an exit
+  ${C_BOLD}reload${C_RESET}         re-apply exits by restarting xray only (hostname kept)
+  ${C_BOLD}test${C_RESET} [exit]    connect through the tunnel and report each exit IP
   ${C_BOLD}log${C_RESET} [-f] [what]  show logs (what: daemon|xray|tunnel|access|error)
   ${C_BOLD}config${C_RESET}         show the current settings
   ${C_BOLD}reconfigure${C_RESET}    re-run the setup wizard
@@ -66,16 +72,214 @@ cmd_status() {
   fi
 }
 
-cmd_link() {
-  need_conf link
+active_host() {
   local host
   host="$(cat "$QT_RUN/hostname" 2>/dev/null || true)"
   [ -n "$host" ] || die "no active link — is the service running?"
-  # --full re-emits the URI with the redundant sni/host params spelled out, for
-  # the rare client that does not default them to the address.
-  if [ "${1:-}" = --full ]; then qt_build_link "$host" full; printf '\n'; else head -1 "$QT_RUN/link.txt"; fi
+  printf '%s' "$host"
 }
-cmd_qr()   { need_conf qr; qt_show_link_and_qr; }
+
+exit_uuid() {
+  local uuid
+  uuid="$(qt_exit_rows | awk -F'\t' -v n="$1" '$1==n{print $2}')"
+  [ -n "$uuid" ] || die "no exit named '$1' (see: quicktunnel-cli exits)"
+  printf '%s' "$uuid"
+}
+
+cmd_link() {
+  need_conf link
+  local host name='' form=short a
+  host="$(active_host)"
+  for a in "$@"; do
+    case "$a" in
+      --full) form=full ;;
+      default) ;;
+      *) name="$a" ;;
+    esac
+  done
+  if [ -n "$name" ]; then
+    qt_build_link "$host" "$form" "$(exit_uuid "$name")" "${QT_REMARK:-quicktunnel}-$name"; printf '\n'
+  elif [ "$form" = full ]; then
+    qt_build_link "$host" full; printf '\n'
+  else
+    head -1 "$QT_RUN/link.txt"
+  fi
+}
+
+cmd_links() {
+  need_conf links
+  active_host >/dev/null
+  [ -s "$QT_RUN/links.tsv" ] || qt_write_links "$(active_host)"
+  local name port via link
+  log ""
+  while IFS=$'\t' read -r name port via link; do
+    printf '  %s%s%s  %sclient socks 127.0.0.1:%s  via %s%s\n  %s\n\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$port" "$via" "$C_RESET" "$link"
+  done < "$QT_RUN/links.tsv"
+}
+
+cmd_qr() {
+  need_conf qr
+  local name="${1:-default}" host link
+  if [ "$name" = default ]; then qt_show_link_and_qr; return; fi
+  host="$(active_host)"
+  link="$(qt_build_link "$host" short "$(exit_uuid "$name")" "${QT_REMARK:-quicktunnel}-$name")"
+  log ""
+  printf '  %sexit%s  %s\n\n' "$C_DIM" "$C_RESET" "$name"
+  qt_qr "$link" || true
+  log ""
+  printf '%s%s%s\n\n' "$C_BOLD" "$link" "$C_RESET"
+}
+
+need_jq() { command -v jq >/dev/null 2>&1 || die "jq is required for exits (apt-get install -y jq)"; }
+
+cmd_exits_list() {
+  local exits
+  exits="$(qt_exits_file)"
+  if ! qt_has_exits; then log "  no exits — all traffic leaves directly. add one: quicktunnel-cli exits add <name> <outbound.json>"; return; fi
+  log ""
+  printf '  %s%-12s %-6s %-12s %-28s %s%s\n' "$C_BOLD" name socks protocol target uuid "$C_RESET"
+  jq -r --argjson base "$QT_SOCKS_PORT" 'to_entries[] | .value as $v | ($v.outbound.settings // {}) as $s
+    | [$v.name, ($v.port // ($base + .key + 1)), $v.outbound.protocol,
+       ((($s.vnext[0] // $s.servers[0] // $s) | if .address then "\(.address):\(.port // "-")" else null end)
+        // $s.peers[0].endpoint // (if $v.outbound.sendThrough then "via \($v.outbound.sendThrough)" else "-" end)),
+       $v.uuid] | @tsv' "$exits" \
+    | while IFS=$'\t' read -r n p pr t u; do printf '  %-12s %-6s %-12s %-28s %s\n' "$n" "$p" "$pr" "$t" "$u"; done
+  log ""
+}
+
+apply_exits() {
+  local cand="$1" probe="$QT_RUN/server.probe.json" err
+  mkdir -p "$QT_RUN"
+  jq -e --argjson base "$QT_SOCKS_PORT" '[to_entries[] | (.value.port // ($base + .key + 1))] + [$base] | (length == (unique | length))' "$cand" >/dev/null \
+    || { rm -f "$cand"; die "client SOCKS ports collide — pass a distinct --port"; }
+  qt_gen_server "$probe" "$cand" || { rm -f "$cand"; die "could not generate the server config"; }
+  if ! err="$("$(qt_xray_bin)" run -test -c "$probe" 2>&1)"; then
+    rm -f "$cand" "$probe"
+    printf '%s\n' "$err" | tail -5 >&2
+    die "xray rejected the config — nothing changed"
+  fi
+  rm -f "$probe"
+  chmod 600 "$cand"
+  mv -f "$cand" "$(qt_exits_file)"
+  ok "exits saved"
+  cmd_reload
+}
+
+cmd_exits_add() {
+  local name="${1:-}" src='-' port='' raw ob exits cand uuid
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --port) port="${2:-}"; shift ;;
+      *) src="$1" ;;
+    esac
+    shift
+  done
+  [[ "$name" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || die "exit name: lowercase letters, digits, - and _ (max 32)"
+  [ "$name" != default ] || die "'default' is reserved for the direct route"
+  [ -z "$port" ] || valid_port "$port" || exit 1
+  if [[ "$src" == vless://* || "$src" == \{* || "$src" == \[* ]]; then raw="$src"
+  elif [ "$src" = - ]; then raw="$(cat)"
+  else [ -r "$src" ] || die "cannot read $src"; raw="$(cat "$src")"; fi
+  raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  if [[ "$raw" == vless://* ]]; then
+    raw="$(printf '%s' "$raw" | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g')"
+    raw="$(qt_vless_outbound "$raw")" || die "could not parse the vless:// link"
+  fi
+  ob="$(printf '%s' "$raw" | jq -c '
+    def pick: [.[] | select(.protocol | IN("freedom","blackhole","dns") | not)][0] // .[0];
+    if type == "array" then pick
+    elif has("outbounds") then .outbounds | pick
+    else . end' 2>/dev/null)" || die "not valid JSON"
+  printf '%s' "$ob" | jq -e 'type == "object" and (.protocol | type == "string")' >/dev/null 2>&1 \
+    || die "expected an Xray outbound object with a \"protocol\" field"
+  exits="$(qt_exits_file)"
+  [ -s "$exits" ] || printf '[]\n' > "$exits"
+  jq -e --arg n "$name" 'any(.[]; .name == $n)' "$exits" >/dev/null && die "exit '$name' already exists — rm it first"
+  uuid="$("$(qt_xray_bin)" uuid)"
+  cand="$exits.next"
+  jq --arg n "$name" --arg u "$uuid" --argjson o "$ob" --arg p "$port" \
+    '. + [{name: $n, uuid: $u, outbound: ($o | del(.tag))} + (if $p == "" then {} else {port: ($p | tonumber)} end)]' \
+    "$exits" > "$cand"
+  apply_exits "$cand"
+}
+
+cmd_exits_rm() {
+  local name="${1:-}" exits cand
+  exits="$(qt_exits_file)"
+  qt_has_exits && jq -e --arg n "$name" 'any(.[]; .name == $n)' "$exits" >/dev/null || die "no exit named '$name'"
+  cand="$exits.next"
+  jq --arg n "$name" 'map(select(.name != $n))' "$exits" > "$cand"
+  apply_exits "$cand"
+}
+
+cmd_exits() {
+  need_root; need_conf exits; need_jq
+  case "${1:-list}" in
+    list|ls) cmd_exits_list ;;
+    add) shift; cmd_exits_add "$@" ;;
+    rm|remove|del) shift; cmd_exits_rm "$@" ;;
+    *) die "usage: quicktunnel-cli exits [list | add <name> [file|-] [--port N] | rm <name>]" ;;
+  esac
+}
+
+cmd_reload() {
+  need_root; need_conf reload
+  local marker="$QT_RUN/.reload-marker"
+  if ! qt_self_running; then
+    qt_gen_server
+    warn "not running — config regenerated, it applies on next start"
+    return
+  fi
+  touch "$marker"
+  sleep 1
+  info "reloading xray (tunnel and hostname stay up)"
+  qt_service_reload || die "could not signal the supervisor"
+  for _ in $(seq 1 40); do
+    [ "$QT_RUN/links.tsv" -nt "$marker" ] && break
+    sleep 0.5
+  done
+  if ! [ "$QT_RUN/links.tsv" -nt "$marker" ]; then
+    rm -f "$marker"
+    warn "no confirmation from the supervisor yet — check: quicktunnel-cli log daemon"
+    return 1
+  fi
+  rm -f "$marker"
+  ok "reloaded"
+  cmd_links
+}
+
+cmd_test() {
+  need_root; need_conf test
+  command -v jq >/dev/null 2>&1 || die "jq is required"
+  local only="${1:-}" host cfg base=39100 i=0 pid name port via link port_t out ms ip cc org
+  host="$(active_host)"
+  [ -s "$QT_RUN/links.tsv" ] || die "no links yet"
+  cfg="$QT_RUN/test-client.json"
+  jq --argjson b "$base" '.log = {loglevel: "none"} | .inbounds |= (to_entries | map(.value.port = ($b + .key) | .value))' \
+    "$QT_ETC/client.json" > "$cfg"
+  chmod 600 "$cfg"
+  "$(qt_xray_bin)" run -c "$cfg" >/dev/null 2>&1 &
+  pid=$!
+  trap 'kill "$pid" 2>/dev/null; rm -f "$cfg"' RETURN
+  sleep 2
+  info "testing through https://$host"
+  log ""
+  printf '  %s%-12s %-9s %-16s %-4s %s%s\n' "$C_BOLD" exit latency "exit ip" cc org "$C_RESET"
+  while IFS=$'\t' read -r name port via link; do
+    port_t=$((base + i)); i=$((i + 1))
+    [ -n "$only" ] && [ "$only" != "$name" ] && continue
+    if out="$(curl -s --max-time 25 --socks5-hostname "127.0.0.1:$port_t" -w '\n%{time_total}' https://ipinfo.io/json)" \
+       && IFS=$'\t' read -r ip cc org < <(printf '%s' "${out%$'\n'*}" | jq -r '[.ip, (.country // "?"), (.org // "")] | @tsv' 2>/dev/null) \
+       && [ -n "$ip" ]; then
+      ms="$(awk -v t="${out##*$'\n'}" 'BEGIN{printf "%dms", t*1000}')"
+      printf '  %-12s %-9s %-16s %-4s %s\n' "$name" "$ms" "$ip" "$cc" "$org"
+    else
+      printf '  %-12s %sfailed%s\n' "$name" "$C_RED" "$C_RESET"
+    fi
+  done < "$QT_RUN/links.tsv"
+  log ""
+}
 cmd_client(){ need_conf client; [ -r "$QT_ETC/client.json" ] || die "no client config yet"; cat "$QT_ETC/client.json"; }
 
 cmd_start()   { need_root; need_conf start;   qt_service_start;   ok "started";   sleep 3; cmd_status; }
@@ -180,7 +384,11 @@ case "${1:-help}" in
   stop) cmd_stop ;;
   restart) cmd_restart ;;
   link) shift; cmd_link "$@" ;;
-  qr) cmd_qr ;;
+  links) cmd_links ;;
+  qr) shift; cmd_qr "$@" ;;
+  exits|exit) shift; cmd_exits "$@" ;;
+  reload) cmd_reload ;;
+  test) shift; cmd_test "$@" ;;
   client) cmd_client ;;
   log|logs) shift; cmd_log "$@" ;;
   config) cmd_config ;;

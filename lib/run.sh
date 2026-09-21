@@ -22,20 +22,47 @@ XRAY_BIN="$(qt_xray_bin)"; CFD_BIN="$(qt_cloudflared_bin)"
 [ -x "$XRAY_BIN" ] || die "xray not found at $QT_BIN/xray"
 [ -x "$CFD_BIN" ]  || die "cloudflared not found at $QT_BIN/cloudflared"
 
-XRAY_PID=''; CFD_PID=''
+XRAY_PID=''; CFD_PID=''; NAP_PID=''; RELOAD=0
 cleanup() {
   [ -n "$XRAY_PID" ] && kill "$XRAY_PID" 2>/dev/null
   [ -n "$CFD_PID" ]  && kill "$CFD_PID"  2>/dev/null
+  [ -n "$NAP_PID" ]  && kill "$NAP_PID"  2>/dev/null
   rm -f "$QT_RUN/hostname"
   wait 2>/dev/null
 }
 trap cleanup EXIT INT TERM
+trap 'RELOAD=1' USR1
+
+stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+
+start_xray() {
+  "$XRAY_BIN" run -c "$QT_ETC/server.json" >>"$QT_LOG/xray.log" 2>&1 &
+  XRAY_PID=$!
+}
+
+reload_xray() {
+  RELOAD=0
+  local next="$QT_RUN/server.next.json"
+  log "$(stamp) reload requested"
+  qt_load_conf
+  if ! qt_gen_server "$next" || ! "$XRAY_BIN" run -test -c "$next" >>"$QT_LOG/xray.log" 2>&1; then
+    rm -f "$next"
+    log "$(stamp) reload aborted: generated config failed validation, keeping the running xray"
+    return
+  fi
+  mv -f "$next" "$QT_ETC/server.json"
+  kill "$XRAY_PID" 2>/dev/null
+  wait "$XRAY_PID" 2>/dev/null
+  start_xray
+  qt_gen_client "$HOST"
+  qt_write_state "$HOST"
+  log "$(stamp) xray reloaded ($(qt_exit_rows | wc -l) exits), tunnel untouched: https://$HOST"
+}
 
 qt_gen_server
 
-log "$(date -u '+%Y-%m-%dT%H:%M:%SZ') starting xray on 127.0.0.1:$QT_PORT"
-"$XRAY_BIN" run -c "$QT_ETC/server.json" >>"$QT_LOG/xray.log" 2>&1 &
-XRAY_PID=$!
+log "$(stamp) starting xray on 127.0.0.1:$QT_PORT"
+start_xray
 
 if [ "$QT_MODE" = named ]; then
   log "$(date -u '+%Y-%m-%dT%H:%M:%SZ') starting named tunnel '$QT_TUNNEL_NAME' -> $QT_HOSTNAME"
@@ -67,7 +94,11 @@ log "$(date -u '+%Y-%m-%dT%H:%M:%SZ') up: https://$HOST"
 # A lone xray with no tunnel (or vice versa) is useless, and in quick mode a
 # cloudflared restart means a new hostname that must be republished.
 while :; do
+  [ "$RELOAD" -eq 1 ] && reload_xray
   if ! kill -0 "$XRAY_PID" 2>/dev/null; then log "xray exited"; exit 1; fi
   if ! kill -0 "$CFD_PID"  2>/dev/null; then log "cloudflared exited"; exit 1; fi
-  sleep 5
+  sleep 5 & NAP_PID=$!
+  wait "$NAP_PID" 2>/dev/null
+  kill "$NAP_PID" 2>/dev/null
+  NAP_PID=''
 done

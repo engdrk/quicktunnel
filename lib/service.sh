@@ -19,6 +19,7 @@ Wants=network-online.target
 Type=simple
 Environment=QT_PREFIX=$QT_PREFIX
 ExecStart=$QT_LIB/run.sh
+ExecReload=/bin/kill -USR1 \$MAINPID
 Restart=always
 RestartSec=5
 KillMode=mixed
@@ -83,6 +84,16 @@ qt_service_stop() {
 }
 
 qt_service_restart() { qt_service_stop; qt_service_start; }
+
+qt_service_reload() {
+  case "$(qt_service_kind)" in
+    systemd)
+      if qt_service_running; then systemctl reload "$QT_SERVICE_NAME"; return; fi ;;
+    launchd)
+      if qt_service_running; then launchctl kill USR1 "system/$QT_PLIST_LABEL"; return; fi ;;
+  esac
+  pkill -USR1 -f "$QT_LIB/run.sh"
+}
 
 qt_service_running() {
   case "$(qt_service_kind)" in

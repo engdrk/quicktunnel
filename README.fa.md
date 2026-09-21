@@ -23,7 +23,7 @@ client ──TLS/WS:443──▶ Cloudflare edge ──▶ cloudflared ──▶
 </div>
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh)
 ```
 
 <div align="right">
@@ -35,8 +35,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/
 </div>
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) --yes
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) \
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh) --yes
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh) \
   --mode named --hostname proxy.example.com --tunnel-name xray --yes
 ```
 

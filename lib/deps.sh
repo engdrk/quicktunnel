@@ -99,6 +99,21 @@ qt_fetch_cloudflared() {
 qt_xray_bin()        { [ -x "$QT_BIN/xray" ] && printf '%s' "$QT_BIN/xray" || command -v xray; }
 qt_cloudflared_bin() { [ -x "$QT_BIN/cloudflared" ] && printf '%s' "$QT_BIN/cloudflared" || command -v cloudflared; }
 
+qt_ensure_jq() {
+  qt_have jq && return 0
+  info "installing jq (for exit routing)"
+  if   qt_have brew && [ "$(id -u)" -ne 0 ]; then brew install jq >/dev/null 2>&1
+  elif qt_have apt-get; then apt-get install -y -qq jq >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq jq >/dev/null 2>&1; }
+  elif qt_have dnf;     then dnf install -y -q jq >/dev/null 2>&1
+  elif qt_have yum;     then yum install -y -q jq >/dev/null 2>&1
+  elif qt_have pacman;  then pacman -Sy --noconfirm --quiet jq >/dev/null 2>&1
+  elif qt_have apk;     then apk add --quiet jq >/dev/null 2>&1
+  fi
+  qt_have jq && { ok "jq installed"; return 0; }
+  warn "could not install jq — exits are unavailable until it is installed"
+  return 1
+}
+
 # qrencode has no portable static build, so use the platform package manager.
 qt_ensure_qrencode() {
   qt_have qrencode && { ok "qrencode already present"; return 0; }

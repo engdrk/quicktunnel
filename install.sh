@@ -2,7 +2,7 @@
 # quicktunnel installer — Xray (VLESS/WebSocket) behind a Cloudflare Tunnel.
 #
 # One-liner (no clone needed):
-#   bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh)
+#   bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh)
 #
 # From a clone:
 #   sudo ./install.sh                 interactive
@@ -16,7 +16,7 @@ set -uo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SRC=''
 QT_PREFIX="${QT_PREFIX:-/usr/local/quicktunnel}"
 
-QT_REPO="${QT_REPO:-hossinasaadi/quicktunnel}"
+QT_REPO="${QT_REPO:-engdrk/quicktunnel}"
 QT_REF="${QT_REF:-main}"
 
 # ---------------------------------------------------------------- bootstrap ---
@@ -163,6 +163,7 @@ fi
 [ -x "$QT_BIN/xray" ]        || qt_fetch_xray
 [ -x "$QT_BIN/cloudflared" ] || qt_fetch_cloudflared
 qt_ensure_qrencode || true
+qt_ensure_jq || true
 
 if [ "$ASSUME_YES" -eq 1 ]; then
   QT_MODE="${QT_MODE:-quick}"

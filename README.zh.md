@@ -18,7 +18,7 @@ client ──TLS/WS:443──▶ Cloudflare edge ──▶ cloudflared ──▶
 一条命令，无需克隆仓库：
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh)
 ```
 
 默认是交互式的：会依次询问隧道模式、端口、UUID、WebSocket 路径、备注名和心跳间隔。
@@ -27,8 +27,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/
 需要非交互安装时，直接在后面追加参数：
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) --yes
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) \
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh) --yes
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh) \
   --mode named --hostname proxy.example.com --tunnel-name xray --yes
 ```
 

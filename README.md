@@ -18,7 +18,7 @@ client ──TLS/WS:443──▶ Cloudflare edge ──▶ cloudflared ──▶
 One command, no clone needed:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh)
 ```
 
 Interactive by default: it asks for the mode, ports, UUID, WebSocket path,
@@ -28,8 +28,8 @@ safe.
 Non-interactive — arguments go straight on the end:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) --yes
-bash <(curl -Ls https://raw.githubusercontent.com/hossinasaadi/quicktunnel/main/install.sh) \
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh) --yes
+bash <(curl -Ls https://raw.githubusercontent.com/engdrk/quicktunnel/main/install.sh) \
   --mode named --hostname proxy.example.com --tunnel-name xray --yes
 ```
 
@@ -88,6 +88,44 @@ quicktunnel-cli uninstall
 ```
 
 Most commands need `sudo`: the config holds the client credential and is mode `600`.
+
+## Exits: one entry point, many egress IPs
+
+The tunnel is the entry point; each **exit** is an extra Xray outbound (another
+VLESS/Reality server, SOCKS, HTTP, WireGuard, `freedom` + `sendThrough`, …).
+Every exit gets its own UUID on the same inbound, and routing sends each user
+to its outbound. The original UUID keeps leaving directly, so existing clients
+are unaffected.
+
+```
+             UUID-default ──▶ direct       (this server's IP)
+client ─CF─▶ UUID-de      ──▶ exit-de      (Germany server)
+             UUID-fr      ──▶ exit-fr      (France server)
+```
+
+```bash
+quicktunnel-cli exits add de 'vless://…@1.2.3.4:443?security=reality&…'   # share link
+quicktunnel-cli exits add fr outbound.json                                 # Xray outbound JSON
+quicktunnel-cli exits add wg - --port 10830 < wireguard-outbound.json     # stdin, fixed client port
+quicktunnel-cli exits                # list
+quicktunnel-cli exits rm fr
+quicktunnel-cli links                # one vless:// per exit + its client SOCKS port
+quicktunnel-cli qr de                # QR for one exit
+quicktunnel-cli test                 # dial every exit through the tunnel, print exit IP/country
+```
+
+- `vless://` links are converted to outbounds (Reality/TLS; tcp, ws, grpc,
+  xhttp, httpupgrade). A JSON file may be a single outbound, an array, or a full
+  config; the first non-`freedom`/`blackhole`/`dns` outbound is used.
+- Every change is validated with `xray run -test` before it is saved; a rejected
+  config changes nothing.
+- Applying exits restarts **only xray** (`quicktunnel-cli reload`, or
+  `systemctl reload quicktunnel`). cloudflared stays up, so a quick-mode
+  hostname survives.
+- `quicktunnel-cli client` emits a client config with one SOCKS port per exit:
+  default on `--socks-port` (10808), exits on the following ports unless given
+  `--port`.
+- Exits are stored in `etc/exits.json` and need `jq`, which the installer adds.
 
 ## Why WebSocket only
 

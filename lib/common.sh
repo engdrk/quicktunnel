@@ -78,6 +78,8 @@ qt_load_conf() {
   # on `set -u` when an older config file lacks them.
   QT_REMARK="${QT_REMARK:-quicktunnel}"
   QT_TUNNEL_TOKEN="${QT_TUNNEL_TOKEN:-}"
+  QT_TG_TOKEN="${QT_TG_TOKEN:-}"
+  QT_TG_CHAT="${QT_TG_CHAT:-}"
 }
 
 qt_save_conf() {
@@ -87,7 +89,7 @@ qt_save_conf() {
   {
     printf '# quicktunnel configuration — generated %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     for k in QT_MODE QT_PORT QT_SOCKS_PORT QT_UUID QT_WSPATH QT_REMARK QT_HEARTBEAT QT_METRICS \
-             QT_HOSTNAME QT_TUNNEL_NAME QT_TUNNEL_TOKEN; do
+             QT_HOSTNAME QT_TUNNEL_NAME QT_TUNNEL_TOKEN QT_TG_TOKEN QT_TG_CHAT; do
       printf '%s=%q\n' "$k" "${!k:-}"
     done
   } > "$QT_CONF"

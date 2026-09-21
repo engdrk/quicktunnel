@@ -28,6 +28,7 @@ ${C_BOLD}usage:${C_RESET} quicktunnel-cli <command>
   ${C_BOLD}reload${C_RESET}         re-apply exits by restarting xray only (hostname kept)
   ${C_BOLD}test${C_RESET} [exit]    connect through the tunnel and report each exit IP
   ${C_BOLD}cloudflare${C_RESET} <host> [name]  fixed hostname via the Cloudflare API (CF_API_TOKEN)
+  ${C_BOLD}notify${C_RESET} telegram <bot-token> <chat-id> | send | off   push links to Telegram when they change
   ${C_BOLD}log${C_RESET} [-f] [what]  show logs (what: daemon|xray|tunnel|access|error)
   ${C_BOLD}config${C_RESET}         show the current settings
   ${C_BOLD}reconfigure${C_RESET}    re-run the setup wizard
@@ -248,6 +249,31 @@ cmd_reload() {
   rm -f "$marker"
   ok "reloaded"
   cmd_links
+}
+
+cmd_notify() {
+  need_root; need_conf notify
+  local host
+  case "${1:-status}" in
+    status)
+      if [ -n "$QT_TG_TOKEN" ]; then log "  telegram: on (chat $QT_TG_CHAT)"; else log "  telegram: off"; fi ;;
+    telegram|tg)
+      QT_TG_TOKEN="${2:-}"; QT_TG_CHAT="${3:-}"
+      if [ -z "$QT_TG_TOKEN" ]; then printf 'bot token: ' >&2; read -rs QT_TG_TOKEN; printf '\n' >&2; fi
+      if [ -z "$QT_TG_CHAT" ]; then QT_TG_CHAT="$(ask 'chat id (user, group or @channel)' '')"; fi
+      qt_tg_send "<b>quicktunnel</b> notifications enabled on <code>$(hostname)</code>" \
+        || die "telegram rejected it — check the bot token, and that you pressed Start on the bot (or added it to the group/channel)"
+      qt_save_conf
+      ok "telegram notifications on — links are sent whenever they change"
+      host="$(cat "$QT_RUN/hostname" 2>/dev/null || true)"
+      if [ -n "$host" ]; then rm -f "$QT_RUN/.notified"; qt_tg_send "$(qt_links_message "$host" "current links")" && ok "current links sent"; fi ;;
+    send)
+      [ -n "$QT_TG_TOKEN" ] || die "notifications are off — quicktunnel-cli notify telegram <bot-token> <chat-id>"
+      qt_tg_send "$(qt_links_message "$(active_host)" "current links")" && ok "sent" || die "send failed" ;;
+    off)
+      QT_TG_TOKEN=''; QT_TG_CHAT=''; qt_save_conf; ok "telegram notifications off" ;;
+    *) die "usage: quicktunnel-cli notify [status | telegram <bot-token> <chat-id> | send | off]" ;;
+  esac
 }
 
 CF_API="https://api.cloudflare.com/client/v4"
@@ -478,6 +504,7 @@ case "${1:-help}" in
   reload) cmd_reload ;;
   test) shift; cmd_test "$@" ;;
   cloudflare|cf) shift; cmd_cloudflare "$@" ;;
+  notify) shift; cmd_notify "$@" ;;
   client) cmd_client ;;
   log|logs) shift; cmd_log "$@" ;;
   config) cmd_config ;;

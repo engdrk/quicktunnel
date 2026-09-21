@@ -103,6 +103,21 @@ quicktunnel-cli uninstall
 
 Most commands need `sudo`: the config holds the client credential and is mode `600`.
 
+## Telegram notifications
+
+Quick mode re-issues the hostname on every restart or reboot. To receive the
+new links automatically:
+
+```bash
+quicktunnel-cli notify telegram <bot-token> <chat-id>   # verifies, saves, sends current links
+quicktunnel-cli notify send                             # resend now
+quicktunnel-cli notify off
+```
+
+A message with every link is sent when the tunnel comes up with a new hostname
+and when exits change. Sending runs in the background and never affects the
+tunnel.
+
 ## Exits: one entry point, many egress IPs
 
 The tunnel is the entry point; each **exit** is an extra Xray outbound (another

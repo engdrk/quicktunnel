@@ -57,6 +57,7 @@ reload_xray() {
   qt_gen_client "$HOST"
   qt_write_state "$HOST"
   log "$(stamp) xray reloaded ($(qt_exit_rows | wc -l) exits), tunnel untouched: https://$HOST"
+  qt_notify_links "$HOST" "exits changed"
 }
 
 qt_gen_server
@@ -95,6 +96,7 @@ fi
 qt_gen_client "$HOST"
 qt_write_state "$HOST"
 log "$(date -u '+%Y-%m-%dT%H:%M:%SZ') up: https://$HOST"
+qt_notify_links "$HOST" "tunnel up — new links"
 
 # If either process dies, exit so the service manager restarts the whole pair.
 # A lone xray with no tunnel (or vice versa) is useless, and in quick mode a

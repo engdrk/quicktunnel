@@ -220,6 +220,41 @@ qt_write_state() {
   qt_write_links "$host"
 }
 
+qt_html_escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+qt_tg_send() {
+  local text="$1"
+  [ -n "${QT_TG_TOKEN:-}" ] && [ -n "${QT_TG_CHAT:-}" ] || return 1
+  curl -sS --max-time 20 --retry 3 --retry-delay 5 \
+    "https://api.telegram.org/bot$QT_TG_TOKEN/sendMessage" \
+    --data-urlencode "chat_id=$QT_TG_CHAT" --data-urlencode "text=$text" \
+    --data-urlencode "parse_mode=HTML" --data-urlencode "disable_web_page_preview=true" \
+    | grep -q '"ok":true'
+}
+
+qt_links_message() {
+  local host="$1" reason="$2" name port via link
+  printf '<b>quicktunnel</b> %s\nhost: <code>%s</code>\n' "$(printf '%s' "$reason" | qt_html_escape)" "$host"
+  while IFS=$'\t' read -r name port via link; do
+    printf '\n<b>%s</b> · socks %s\n<code>%s</code>\n' "$name" "$port" "$(printf '%s' "$link" | qt_html_escape)"
+  done < "$QT_RUN/links.tsv"
+}
+
+qt_notify_links() {
+  local host="$1" reason="${2:-links changed}" sum sent="$QT_RUN/.notified"
+  [ -n "${QT_TG_TOKEN:-}" ] && [ -n "${QT_TG_CHAT:-}" ] && [ -s "$QT_RUN/links.tsv" ] || return 0
+  sum="$(cksum < "$QT_RUN/links.tsv")"
+  [ "$(cat "$sent" 2>/dev/null)" = "$sum" ] && return 0
+  (
+    if qt_tg_send "$(qt_links_message "$host" "$reason")"; then
+      printf '%s' "$sum" > "$sent"
+      printf '%s telegram: links sent\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    else
+      printf '%s telegram: send failed (will retry on next change or: quicktunnel-cli notify send)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    fi
+  ) &
+}
+
 qt_write_links() {
   local host="$1" name uuid port proto out="$QT_RUN/links.tsv"
   {

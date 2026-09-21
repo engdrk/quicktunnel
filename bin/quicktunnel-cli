@@ -25,6 +25,7 @@ ${C_BOLD}usage:${C_RESET} quicktunnel-cli <command>
   ${C_BOLD}exits${C_RESET}          list exit outbounds
   ${C_BOLD}exits add${C_RESET} <name> <vless://…|file|-> [--port N]   add an exit (share link or outbound JSON)
   ${C_BOLD}exits rm${C_RESET} <name>  remove an exit
+  ${C_BOLD}exits geo${C_RESET} [name [CC [Country]]]  re-detect or set exit countries (flag in names)
   ${C_BOLD}reload${C_RESET}         re-apply exits by restarting xray only (hostname kept)
   ${C_BOLD}test${C_RESET} [exit]    connect through the tunnel and report each exit IP
   ${C_BOLD}cloudflare${C_RESET} <host> [name]  fixed hostname via the Cloudflare API (CF_API_TOKEN)
@@ -89,24 +90,28 @@ exit_uuid() {
   printf '%s' "$uuid"
 }
 
+link_row() {
+  local row
+  [ -s "$QT_RUN/links.tsv" ] || qt_write_links "$(active_host)"
+  row="$(awk -F'\t' -v n="$1" '$1==n' "$QT_RUN/links.tsv")"
+  [ -n "$row" ] || die "no exit named '$1' (see: quicktunnel-cli exits)"
+  printf '%s' "$row"
+}
+
 cmd_link() {
   need_conf link
-  local host name='' form=short a
+  local host name=default form=short a row uuid
   host="$(active_host)"
   for a in "$@"; do
     case "$a" in
       --full) form=full ;;
-      default) ;;
       *) name="$a" ;;
     esac
   done
-  if [ -n "$name" ]; then
-    qt_build_link "$host" "$form" "$(exit_uuid "$name")" "${QT_REMARK:-quicktunnel}-$name"; printf '\n'
-  elif [ "$form" = full ]; then
-    qt_build_link "$host" full; printf '\n'
-  else
-    head -1 "$QT_RUN/link.txt"
-  fi
+  row="$(link_row "$name")"
+  if [ "$form" = short ]; then printf '%s\n' "$(cut -f4 <<< "$row")"; return; fi
+  if [ "$name" = default ]; then uuid="$QT_UUID"; else uuid="$(exit_uuid "$name")"; fi
+  qt_build_link "$host" full "$uuid" "$(cut -f3 <<< "$row")"; printf '\n'
 }
 
 cmd_links() {
@@ -116,18 +121,19 @@ cmd_links() {
   local name port via link
   log ""
   while IFS=$'\t' read -r name port via link; do
-    printf '  %s%s%s  %sclient socks 127.0.0.1:%s  via %s%s\n  %s\n\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$port" "$via" "$C_RESET" "$link"
+    printf '  %s%s%s  %s%s · client socks 127.0.0.1:%s%s\n  %s\n\n' "$C_BOLD" "$via" "$C_RESET" "$C_DIM" "$name" "$port" "$C_RESET" "$link"
   done < "$QT_RUN/links.tsv"
 }
 
 cmd_qr() {
   need_conf qr
-  local name="${1:-default}" host link
+  local name="${1:-default}" row link
   if [ "$name" = default ]; then qt_show_link_and_qr; return; fi
-  host="$(active_host)"
-  link="$(qt_build_link "$host" short "$(exit_uuid "$name")" "${QT_REMARK:-quicktunnel}-$name")"
+  active_host >/dev/null
+  row="$(link_row "$name")"
+  link="$(cut -f4 <<< "$row")"
   log ""
-  printf '  %sexit%s  %s\n\n' "$C_DIM" "$C_RESET" "$name"
+  printf '  %s\n\n' "$(cut -f3 <<< "$row")"
   qt_qr "$link" || true
   log ""
   printf '%s%s%s\n\n' "$C_BOLD" "$link" "$C_RESET"
@@ -140,14 +146,54 @@ cmd_exits_list() {
   exits="$(qt_exits_file)"
   if ! qt_has_exits; then log "  no exits — all traffic leaves directly. add one: quicktunnel-cli exits add <name> <outbound.json>"; return; fi
   log ""
-  printf '  %s%-12s %-6s %-12s %-28s %s%s\n' "$C_BOLD" name socks protocol target uuid "$C_RESET"
+  printf '  %s%-12s %-6s %-22s %-10s %-28s %s%s\n' "$C_BOLD" name socks country protocol target uuid "$C_RESET"
   jq -r --argjson base "$QT_SOCKS_PORT" 'to_entries[] | .value as $v | ($v.outbound.settings // {}) as $s
-    | [$v.name, ($v.port // ($base + .key + 1)), $v.outbound.protocol,
+    | [$v.name, ($v.port // ($base + .key + 1)), ($v.cc // "-"), ($v.country // "-"), $v.outbound.protocol,
        ((($s.vnext[0] // $s.servers[0] // $s) | if .address then "\(.address):\(.port // "-")" else null end)
         // $s.peers[0].endpoint // (if $v.outbound.sendThrough then "via \($v.outbound.sendThrough)" else "-" end)),
        $v.uuid] | @tsv' "$exits" \
-    | while IFS=$'\t' read -r n p pr t u; do printf '  %-12s %-6s %-12s %-28s %s\n' "$n" "$p" "$pr" "$t" "$u"; done
+    | while IFS=$'\t' read -r n p cc co pr t u; do
+        printf '  %-12s %-6s %s %-19s %-10s %-28s %s\n' "$n" "$p" "$(qt_flag "$cc" || printf '  ')" "$co" "$pr" "$t" "$u"
+      done
   log ""
+}
+
+cmd_exits_geo() {
+  local name="${1:-}" cc="${2:-}" country="${3:-}" exits cand n host geo
+  exits="$(qt_exits_file)"
+  if [ "$name" = default ] || [ "$name" = direct ]; then
+    if [ -n "$cc" ]; then
+      cc="${cc^^}"; [[ "$cc" =~ ^[A-Z]{2}$ ]] || die "country code must be 2 letters, e.g. FI"
+      printf '%s\t%s\n' "$cc" "${country:-$cc}" > "$QT_ETC/self-geo.tsv"
+    else
+      rm -f "$QT_ETC/self-geo.tsv"; qt_self_geo >/dev/null || warn "could not locate this server"
+    fi
+    printf '  %-12s %s\n' default "$(qt_default_label)"
+    cmd_reload; return
+  fi
+  qt_has_exits || die "no exits"
+  cand="$exits.next"
+  cp "$exits" "$cand"
+  if [ -n "$cc" ]; then
+    jq -e --arg n "$name" 'any(.[]; .name == $n)' "$cand" >/dev/null || { rm -f "$cand"; die "no exit named '$name'"; }
+    cc="${cc^^}"; [[ "$cc" =~ ^[A-Z]{2}$ ]] || { rm -f "$cand"; die "country code must be 2 letters, e.g. DE"; }
+    jq --arg n "$name" --arg c "$cc" --arg co "${country:-$cc}" 'map(if .name == $n then .cc = $c | .country = $co else . end)' "$cand" > "$cand.t" && mv -f "$cand.t" "$cand"
+  else
+    for n in $(jq -r '.[].name' "$cand"); do
+      [ -n "$name" ] && [ "$n" != "$name" ] && continue
+      host="$(jq -c --arg n "$n" '.[] | select(.name == $n) | .outbound' "$cand" | qt_outbound_host)"
+      if geo="$(qt_geo_lookup "$host")"; then
+        jq --arg n "$n" --arg c "$(cut -f1 <<< "$geo")" --arg co "$(cut -f2 <<< "$geo")" \
+          'map(if .name == $n then .cc = $c | .country = $co else . end)' "$cand" > "$cand.t" && mv -f "$cand.t" "$cand"
+        printf '  %-12s %s %s\n' "$n" "$(qt_flag "$(cut -f1 <<< "$geo")")" "$(cut -f2 <<< "$geo")"
+      else
+        warn "$n: could not locate $host — set it: quicktunnel-cli exits geo $n <CC> [Country]"
+      fi
+    done
+  fi
+  chmod 600 "$cand"
+  mv -f "$cand" "$exits"
+  cmd_reload
 }
 
 apply_exits() {
@@ -169,7 +215,7 @@ apply_exits() {
 }
 
 cmd_exits_add() {
-  local name="${1:-}" src='-' port='' raw ob exits cand uuid
+  local name="${1:-}" src='-' port='' raw ob exits cand uuid geo
   shift || true
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -200,9 +246,14 @@ cmd_exits_add() {
   [ -s "$exits" ] || printf '[]\n' > "$exits"
   jq -e --arg n "$name" 'any(.[]; .name == $n)' "$exits" >/dev/null && die "exit '$name' already exists — rm it first"
   uuid="$("$(qt_xray_bin)" uuid)"
+  geo="$(qt_geo_lookup "$(printf '%s' "$ob" | qt_outbound_host)")" || geo=''
+  [ -n "$geo" ] && info "exit located: $(qt_flag "$(cut -f1 <<< "$geo")") $(cut -f2 <<< "$geo")"
   cand="$exits.next"
   jq --arg n "$name" --arg u "$uuid" --argjson o "$ob" --arg p "$port" \
-    '. + [{name: $n, uuid: $u, outbound: ($o | del(.tag))} + (if $p == "" then {} else {port: ($p | tonumber)} end)]' \
+     --arg cc "$(cut -f1 <<< "$geo")" --arg co "$(cut -f2 <<< "$geo")" \
+    '. + [{name: $n, uuid: $u, outbound: ($o | del(.tag))}
+          + (if $p == "" then {} else {port: ($p | tonumber)} end)
+          + (if $cc == "" then {} else {cc: $cc, country: $co} end)]' \
     "$exits" > "$cand"
   apply_exits "$cand"
 }
@@ -221,8 +272,9 @@ cmd_exits() {
   case "${1:-list}" in
     list|ls) cmd_exits_list ;;
     add) shift; cmd_exits_add "$@" ;;
+    geo) shift; cmd_exits_geo "$@" ;;
     rm|remove|del) shift; cmd_exits_rm "$@" ;;
-    *) die "usage: quicktunnel-cli exits [list | add <name> [file|-] [--port N] | rm <name>]" ;;
+    *) die "usage: quicktunnel-cli exits [list | add <name> [file|-] [--port N] | rm <name> | geo [name [CC [Country]]]]" ;;
   esac
 }
 

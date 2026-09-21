@@ -173,6 +173,9 @@ quicktunnel-cli test                 # dial every exit through the tunnel, print
   default on `--socks-port` (10808), exits on the following ports unless given
   `--port`.
 - Exits are stored in `etc/exits.json` and need `jq`, which the installer adds.
+- Link names carry the exit's country, e.g. `🇩🇪 Germany · de`: detected from the
+  exit server's address when added (`exits geo` re-detects; `exits geo de DE Germany`
+  or `exits geo default FI Finland` overrides a wrong guess).
 
 ## Why WebSocket only
 

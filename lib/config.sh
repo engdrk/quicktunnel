@@ -26,7 +26,51 @@ qt_exit_rows() {
   local exits="${1:-$(qt_exits_file)}"
   qt_exits_nonempty "$exits" || return 0
   jq -r --argjson base "$QT_SOCKS_PORT" \
-    'to_entries[] | [.value.name, .value.uuid, (.value.port // ($base + .key + 1)), .value.outbound.protocol] | @tsv' "$exits"
+    'to_entries[] | [.value.name, .value.uuid, (.value.port // ($base + .key + 1)), .value.outbound.protocol,
+      ((.value.cc // "") | if . == "" then "-" else . end), ((.value.country // "") | if . == "" then "-" else . end)] | @tsv' "$exits"
+}
+
+qt_outbound_host() {
+  jq -r '(.settings.vnext[0].address // .settings.servers[0].address // .settings.address
+          // (.settings.peers[0].endpoint // "" | sub(":[0-9]+$"; "") | ltrimstr("[") | rtrimstr("]"))
+          // .sendThrough // "") | tostring'
+}
+
+qt_geo_lookup() {
+  local target="${1:-}" out
+  out="$(curl -s --max-time 8 "http://ip-api.com/json/$target?fields=status,country,countryCode" 2>/dev/null)"
+  printf '%s' "$out" | jq -er 'select(.status == "success") | [.countryCode, .country] | @tsv' 2>/dev/null && return 0
+  out="$(curl -s --max-time 8 "https://ipinfo.io/${target:+$target/}country" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$out" =~ ^[A-Z]{2}$ ]] && printf '%s\t%s\n' "$out" "$out"
+}
+
+qt_self_geo() {
+  local cache="$QT_ETC/self-geo.tsv" geo
+  if [ ! -s "$cache" ]; then
+    geo="$(qt_geo_lookup)" || return 1
+    printf '%s\n' "$geo" > "$cache"
+  fi
+  cat "$cache"
+}
+
+qt_flag() {
+  local cc="${1^^}" a b
+  [[ "$cc" =~ ^[A-Z]{2}$ ]] || return 1
+  a=$(( $(printf '%d' "'${cc:0:1}") - 65 + 166 )); b=$(( $(printf '%d' "'${cc:1:1}") - 65 + 166 ))
+  printf "\\xF0\\x9F\\x87\\x$(printf '%X' "$a")\\xF0\\x9F\\x87\\x$(printf '%X' "$b")"
+}
+
+qt_label() {
+  local cc="${1:--}" country="${2:--}" name="$3"
+  if [ "$cc" = - ] || ! qt_flag "$cc" >/dev/null; then printf '%s' "$name"; return; fi
+  [ "$country" = - ] && country="$cc"
+  printf '%s %s · %s' "$(qt_flag "$cc")" "$country" "$name"
+}
+
+qt_default_label() {
+  local cc='-' country='-'
+  IFS=$'\t' read -r cc country < <(qt_self_geo 2>/dev/null) || true
+  qt_label "${cc:--}" "${country:--}" direct
 }
 
 qt_urldecode() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
@@ -219,7 +263,7 @@ qt_write_state() {
   local host="$1"
   mkdir -p "$QT_RUN"
   printf '%s\n' "$host" > "$QT_RUN/hostname"
-  qt_build_link "$host" > "$QT_RUN/link.txt"
+  qt_build_link "$host" short "$QT_UUID" "$(qt_default_label)" > "$QT_RUN/link.txt"
   printf '\n' >> "$QT_RUN/link.txt"
   chmod 600 "$QT_RUN/link.txt"
   qt_write_links "$host"
@@ -242,7 +286,7 @@ qt_links_message() {
   printf '<b>quicktunnel</b> %s\nhost: <code>%s</code>\n' "$(printf '%s' "$reason" | qt_html_escape)" "$host"
   [ -n "${QT_SUB_URL:-}" ] && printf 'sub: <code>%s</code>\n' "$(printf '%s' "$QT_SUB_URL" | qt_html_escape)"
   while IFS=$'\t' read -r name port via link; do
-    printf '\n<b>%s</b> · socks %s\n<code>%s</code>\n' "$name" "$port" "$(printf '%s' "$link" | qt_html_escape)"
+    printf '\n<b>%s</b> · socks %s\n<code>%s</code>\n' "$(printf '%s' "$via" | qt_html_escape)" "$port" "$(printf '%s' "$link" | qt_html_escape)"
   done < "$QT_RUN/links.tsv"
 }
 
@@ -302,12 +346,13 @@ qt_announce_links() {
 }
 
 qt_write_links() {
-  local host="$1" name uuid port proto out="$QT_RUN/links.tsv"
+  local host="$1" name uuid port proto cc country label out="$QT_RUN/links.tsv"
   {
-    printf 'default\t%s\tdirect\t%s\n' "$QT_SOCKS_PORT" "$(qt_build_link "$host")"
-    qt_exit_rows | while IFS=$'\t' read -r name uuid port proto; do
-      printf '%s\t%s\t%s\t%s\n' "$name" "$port" "$proto" \
-        "$(qt_build_link "$host" short "$uuid" "${QT_REMARK:-quicktunnel}-$name")"
+    label="$(qt_default_label)"
+    printf 'default\t%s\t%s\t%s\n' "$QT_SOCKS_PORT" "$label" "$(qt_build_link "$host" short "$QT_UUID" "$label")"
+    qt_exit_rows | while IFS=$'\t' read -r name uuid port proto cc country; do
+      label="$(qt_label "$cc" "$country" "$name")"
+      printf '%s\t%s\t%s\t%s\n' "$name" "$port" "$label" "$(qt_build_link "$host" short "$uuid" "$label")"
     done
   } > "$out.tmp"
   chmod 600 "$out.tmp"

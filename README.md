@@ -136,6 +136,24 @@ A message with every link is sent when the tunnel comes up with a new hostname
 and when exits change. Sending runs in the background and never affects the
 tunnel.
 
+## Traffic monitor
+
+Per-node usage from Xray's stats API (bound to `127.0.0.1:10085` only). Every
+node — the direct route and each exit — is its own user, so each is counted
+separately.
+
+```bash
+quicktunnel-cli traffic              # online sessions, current rate, today, 30 days, all time
+quicktunnel-cli traffic report       # send today's report to Telegram now
+quicktunnel-cli traffic tz Asia/Tehran   # timezone that decides where a day starts
+quicktunnel-cli traffic reset
+```
+
+Counters are flushed into `etc/traffic.json` every minute and right before any
+reload or stop, so restarts lose at most a few seconds. With Telegram enabled,
+yesterday's per-node totals are sent once a day, just after midnight in the
+configured timezone. Daily history is kept for 62 days.
+
 ## Exits: one entry point, many egress IPs
 
 The tunnel is the entry point; each **exit** is an extra Xray outbound (another

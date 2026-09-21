@@ -3,7 +3,7 @@
 set -uo pipefail
 
 QT_PREFIX="${QT_PREFIX:-/usr/local/quicktunnel}"
-for f in common deps config qr service; do
+for f in common deps config qr service traffic; do
   # shellcheck disable=SC1090
   . "$QT_PREFIX/lib/$f.sh" 2>/dev/null || { echo "quicktunnel is not installed at $QT_PREFIX" >&2; exit 1; }
 done
@@ -28,6 +28,7 @@ ${C_BOLD}usage:${C_RESET} quicktunnel-cli <command>
   ${C_BOLD}exits geo${C_RESET} [name [CC [Country]]]  re-detect or set exit countries (flag in names)
   ${C_BOLD}reload${C_RESET}         re-apply exits by restarting xray only (hostname kept)
   ${C_BOLD}test${C_RESET} [exit]    connect through the tunnel and report each exit IP
+  ${C_BOLD}traffic${C_RESET} [report [day] | tz <zone> | reset]   per-node usage; daily report via Telegram
   ${C_BOLD}cloudflare${C_RESET} <host> [name]  fixed hostname via the Cloudflare API (CF_API_TOKEN)
   ${C_BOLD}sub${C_RESET} [github [token] | push | off]   stable subscription URL kept in a secret gist
   ${C_BOLD}notify${C_RESET} telegram <bot-token> <chat-id> | send | off   push links to Telegram when they change
@@ -369,6 +370,44 @@ cmd_sub() {
   esac
 }
 
+pad() {
+  local LC_ALL=C.UTF-8 s="$1" w="$2" n
+  n=$(( w - ${#s} )); [ "$n" -lt 0 ] && n=0
+  printf '%s%*s' "$s" "$n" ''
+}
+
+cmd_traffic() {
+  need_root; need_conf traffic; need_jq
+  local day node on rate today month total
+  case "${1:-show}" in
+    show)
+      log ""
+      printf '  %s%s %s %s %s %s %s%s\n' "$C_BOLD" "$(pad node 26)" "$(pad online 7)" "$(pad now 26)" \
+        "$(pad today 22)" "$(pad '30 days' 22)" "all time" "$C_RESET"
+      qt_traffic_rows | while IFS=$'\t' read -r node on rate today month total; do
+        printf '  %s %s %s %s %s %s\n' "$(pad "$node" 26)" "$(pad "$on" 7)" "$(pad "$rate" 26)" \
+          "$(pad "$today" 22)" "$(pad "$month" 22)" "$total"
+      done
+      log ""
+      printf '  %sday boundary: %s · counters flushed every minute · daily report %s%s\n\n' "$C_DIM" \
+        "${QT_TZ:-server local time}" "$([ -n "$QT_TG_TOKEN" ] && echo "on (Telegram)" || echo "off — enable: quicktunnel-cli notify telegram …")" "$C_RESET" ;;
+    report)
+      day="${2:-$(qt_today)}"
+      [ -n "$QT_TG_TOKEN" ] || die "Telegram is off — quicktunnel-cli notify telegram <bot-token> <chat-id>"
+      qt_traffic_collect || warn "could not flush live counters"
+      qt_tg_send "$(qt_traffic_report_message "$day")" && ok "report for $day sent" || die "send failed" ;;
+    tz)
+      [ -n "${2:-}" ] || { log "  ${QT_TZ:-server local time}"; return; }
+      [ -e "/usr/share/zoneinfo/$2" ] || die "unknown timezone: $2 (e.g. Asia/Tehran, Europe/Berlin, UTC)"
+      QT_TZ="$2"; qt_save_conf; ok "day boundary now $QT_TZ (today is $(qt_today))" ;;
+    reset)
+      ask_yn "Erase all stored traffic history?" n || { log "cancelled"; return; }
+      qt_traffic_collect >/dev/null 2>&1 || true
+      rm -f "$(qt_traffic_file)" "$QT_ETC/.traffic-reported"; ok "traffic history erased" ;;
+    *) die "usage: quicktunnel-cli traffic [show | report [YYYY-MM-DD] | tz <Area/City> | reset]" ;;
+  esac
+}
+
 CF_API="https://api.cloudflare.com/client/v4"
 
 cf() {
@@ -599,6 +638,7 @@ case "${1:-help}" in
   cloudflare|cf) shift; cmd_cloudflare "$@" ;;
   notify) shift; cmd_notify "$@" ;;
   sub) shift; cmd_sub "$@" ;;
+  traffic|stats) shift; cmd_traffic "$@" ;;
   client) cmd_client ;;
   log|logs) shift; cmd_log "$@" ;;
   config) cmd_config ;;

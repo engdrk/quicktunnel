@@ -126,13 +126,18 @@ qt_server_base_json() {
   cat <<JSON
 {
   "log": { "loglevel": "warning", "access": "$(qt_access_log_target)", "error": "$QT_LOG/error.log", "maskAddress": "quarter" },
+  "stats": {},
+  "api": { "tag": "api", "listen": "${QT_API:-127.0.0.1:10085}", "services": ["StatsService"] },
+  "policy": {
+    "levels": { "0": { "statsUserUplink": true, "statsUserDownlink": true, "statsUserOnline": true } }
+  },
   "dns": { "servers": ["https+local://1.1.1.1/dns-query", "https+local://8.8.8.8/dns-query"], "queryStrategy": "UseIP" },
   "inbounds": [{
     "tag": "in-ws",
     "listen": "127.0.0.1",
     "port": $QT_PORT,
     "protocol": "vless",
-    "settings": { "clients": [{ "id": "$QT_UUID" }], "decryption": "none" },
+    "settings": { "clients": [{ "id": "$QT_UUID", "email": "default" }], "decryption": "none" },
     "streamSettings": {
       "network": "ws",
       "security": "none",

@@ -149,7 +149,7 @@ mkdir -p "$QT_BIN" "$QT_ETC" "$QT_LOG" "$QT_RUN" "$QT_LIB"
 
 info "installing scripts"
 install -m 0644 "$SRC"/lib/common.sh "$SRC"/lib/deps.sh "$SRC"/lib/config.sh \
-                "$SRC"/lib/qr.sh "$SRC"/lib/service.sh "$SRC"/lib/wizard.sh "$QT_LIB/"
+                "$SRC"/lib/qr.sh "$SRC"/lib/service.sh "$SRC"/lib/wizard.sh "$SRC"/lib/traffic.sh "$QT_LIB/"
 install -m 0755 "$SRC"/lib/run.sh "$QT_LIB/run.sh"
 install -m 0755 "$SRC"/bin/quicktunnel-cli "$QT_BIN/quicktunnel-cli"
 if mkdir -p /usr/local/bin 2>/dev/null && [ -w /usr/local/bin ]; then

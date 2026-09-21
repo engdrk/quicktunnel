@@ -14,6 +14,8 @@ QT_PREFIX="${QT_PREFIX:-/usr/local/quicktunnel}"
 . "$QT_PREFIX/lib/deps.sh"
 # shellcheck disable=SC1091
 . "$QT_PREFIX/lib/config.sh"
+# shellcheck disable=SC1091
+. "$QT_PREFIX/lib/traffic.sh"
 
 qt_load_conf
 mkdir -p "$QT_LOG" "$QT_RUN"
@@ -24,6 +26,7 @@ XRAY_BIN="$(qt_xray_bin)"; CFD_BIN="$(qt_cloudflared_bin)"
 
 XRAY_PID=''; CFD_PID=''; NAP_PID=''; RELOAD=0
 cleanup() {
+  [ -n "$XRAY_PID" ] && kill -0 "$XRAY_PID" 2>/dev/null && qt_traffic_collect 2>/dev/null
   [ -n "$XRAY_PID" ] && kill "$XRAY_PID" 2>/dev/null
   [ -n "$CFD_PID" ]  && kill "$CFD_PID"  2>/dev/null
   [ -n "$NAP_PID" ]  && kill "$NAP_PID"  2>/dev/null
@@ -45,7 +48,7 @@ reload_xray() {
   local next="$QT_RUN/server.next.json"
   log "$(stamp) reload requested"
   # shellcheck disable=SC1091
-  . "$QT_LIB/common.sh"; . "$QT_LIB/deps.sh"; . "$QT_LIB/config.sh"
+  . "$QT_LIB/common.sh"; . "$QT_LIB/deps.sh"; . "$QT_LIB/config.sh"; . "$QT_LIB/traffic.sh"
   qt_load_conf
   if ! qt_gen_server "$next" || ! "$XRAY_BIN" run -test -c "$next" >>"$QT_LOG/xray.log" 2>&1; then
     rm -f "$next"
@@ -53,6 +56,7 @@ reload_xray() {
     return
   fi
   mv -f "$next" "$QT_ETC/server.json"
+  qt_traffic_collect 2>/dev/null || log "$(stamp) traffic: could not read counters before reload"
   kill "$XRAY_PID" 2>/dev/null
   wait "$XRAY_PID" 2>/dev/null
   start_xray
@@ -107,7 +111,12 @@ TICK=0
 while :; do
   [ "$RELOAD" -eq 1 ] && reload_xray
   TICK=$((TICK + 1))
-  if [ $((TICK % 12)) -eq 0 ]; then qt_load_conf; qt_announce_links "$HOST" "tunnel up — new links"; fi
+  if [ $((TICK % 12)) -eq 0 ]; then
+    qt_load_conf
+    qt_announce_links "$HOST" "tunnel up — new links"
+    qt_traffic_collect 2>/dev/null || true
+    qt_traffic_daily_report
+  fi
   if ! kill -0 "$XRAY_PID" 2>/dev/null; then log "xray exited"; exit 1; fi
   if ! kill -0 "$CFD_PID"  2>/dev/null; then log "cloudflared exited"; exit 1; fi
   sleep 5 & NAP_PID=$!

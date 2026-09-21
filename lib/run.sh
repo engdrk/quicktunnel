@@ -57,7 +57,7 @@ reload_xray() {
   qt_gen_client "$HOST"
   qt_write_state "$HOST"
   log "$(stamp) xray reloaded ($(qt_exit_rows | wc -l) exits), tunnel untouched: https://$HOST"
-  qt_notify_links "$HOST" "exits changed"
+  qt_announce_links "$HOST" "exits changed"
 }
 
 qt_gen_server
@@ -96,7 +96,7 @@ fi
 qt_gen_client "$HOST"
 qt_write_state "$HOST"
 log "$(date -u '+%Y-%m-%dT%H:%M:%SZ') up: https://$HOST"
-qt_notify_links "$HOST" "tunnel up — new links"
+qt_announce_links "$HOST" "tunnel up — new links"
 
 # If either process dies, exit so the service manager restarts the whole pair.
 # A lone xray with no tunnel (or vice versa) is useless, and in quick mode a
@@ -105,7 +105,7 @@ TICK=0
 while :; do
   [ "$RELOAD" -eq 1 ] && reload_xray
   TICK=$((TICK + 1))
-  if [ $((TICK % 12)) -eq 0 ]; then qt_notify_links "$HOST" "tunnel up — new links"; fi
+  if [ $((TICK % 12)) -eq 0 ]; then qt_load_conf; qt_announce_links "$HOST" "tunnel up — new links"; fi
   if ! kill -0 "$XRAY_PID" 2>/dev/null; then log "xray exited"; exit 1; fi
   if ! kill -0 "$CFD_PID"  2>/dev/null; then log "cloudflared exited"; exit 1; fi
   sleep 5 & NAP_PID=$!

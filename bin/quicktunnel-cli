@@ -28,6 +28,7 @@ ${C_BOLD}usage:${C_RESET} quicktunnel-cli <command>
   ${C_BOLD}reload${C_RESET}         re-apply exits by restarting xray only (hostname kept)
   ${C_BOLD}test${C_RESET} [exit]    connect through the tunnel and report each exit IP
   ${C_BOLD}cloudflare${C_RESET} <host> [name]  fixed hostname via the Cloudflare API (CF_API_TOKEN)
+  ${C_BOLD}sub${C_RESET} [github [token] | push | off]   stable subscription URL kept in a secret gist
   ${C_BOLD}notify${C_RESET} telegram <bot-token> <chat-id> | send | off   push links to Telegram when they change
   ${C_BOLD}log${C_RESET} [-f] [what]  show logs (what: daemon|xray|tunnel|access|error)
   ${C_BOLD}config${C_RESET}         show the current settings
@@ -276,6 +277,46 @@ cmd_notify() {
   esac
 }
 
+cmd_sub() {
+  need_root; need_conf sub; need_jq
+  local out login id sum
+  case "${1:-show}" in
+    show)
+      [ -n "$QT_SUB_URL" ] || { log "  no subscription — enable: quicktunnel-cli sub github [token]"; return; }
+      log ""; printf '  %s\n\n' "$QT_SUB_URL"
+      qt_qr "$QT_SUB_URL" || true; log "" ;;
+    github|gist)
+      QT_SUB_TOKEN="${2:-}"
+      if [ -z "$QT_SUB_TOKEN" ]; then printf 'GitHub token (classic, gist scope only): ' >&2; read -rs QT_SUB_TOKEN; printf '\n' >&2; fi
+      [ -n "$QT_SUB_TOKEN" ] || die "no token"
+      [ -s "$QT_RUN/links.tsv" ] || die "no links yet — is the service running?"
+      login="$(qt_gh GET /user | jq -r '.login // empty')"
+      [ -n "$login" ] || die "GitHub rejected the token"
+      if [ -n "$QT_SUB_GIST" ] && qt_gh GET "/gists/$QT_SUB_GIST" | jq -e '.id' >/dev/null 2>&1; then
+        id="$QT_SUB_GIST"
+      else
+        out="$(qt_gh POST /gists "$(jq -nc --arg c "$(qt_sub_body)" '{description: "", public: false, files: {"sub.txt": {content: $c}}}')")"
+        id="$(printf '%s' "$out" | jq -r '.id // empty')"
+        [ -n "$id" ] || die "could not create the gist (token needs the gist scope): $(printf '%s' "$out" | jq -r '.message // empty')"
+      fi
+      QT_SUB_GIST="$id"
+      QT_SUB_URL="https://gist.githubusercontent.com/$login/$id/raw/sub.txt"
+      qt_sub_push || die "could not write the gist"
+      cksum < "$QT_RUN/links.tsv" > "$QT_RUN/.published"
+      qt_save_conf
+      ok "subscription live — the server rewrites it whenever the links change"
+      cmd_sub show ;;
+    push)
+      qt_sub_push || die "push failed"
+      cksum < "$QT_RUN/links.tsv" > "$QT_RUN/.published"
+      ok "pushed" ;;
+    off)
+      QT_SUB_TOKEN=''; QT_SUB_GIST=''; QT_SUB_URL=''; qt_save_conf
+      ok "subscription updates off (the gist itself is left in place)" ;;
+    *) die "usage: quicktunnel-cli sub [show | github [token] | push | off]" ;;
+  esac
+}
+
 CF_API="https://api.cloudflare.com/client/v4"
 
 cf() {
@@ -505,6 +546,7 @@ case "${1:-help}" in
   test) shift; cmd_test "$@" ;;
   cloudflare|cf) shift; cmd_cloudflare "$@" ;;
   notify) shift; cmd_notify "$@" ;;
+  sub) shift; cmd_sub "$@" ;;
   client) cmd_client ;;
   log|logs) shift; cmd_log "$@" ;;
   config) cmd_config ;;

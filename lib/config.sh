@@ -235,6 +235,7 @@ qt_tg_send() {
 qt_links_message() {
   local host="$1" reason="$2" name port via link
   printf '<b>quicktunnel</b> %s\nhost: <code>%s</code>\n' "$(printf '%s' "$reason" | qt_html_escape)" "$host"
+  [ -n "${QT_SUB_URL:-}" ] && printf 'sub: <code>%s</code>\n' "$(printf '%s' "$QT_SUB_URL" | qt_html_escape)"
   while IFS=$'\t' read -r name port via link; do
     printf '\n<b>%s</b> · socks %s\n<code>%s</code>\n' "$name" "$port" "$(printf '%s' "$link" | qt_html_escape)"
   done < "$QT_RUN/links.tsv"
@@ -255,6 +256,44 @@ qt_notify_links() {
     fi
   ) &
   QT_NOTIFY_PID=$!
+}
+
+qt_sub_body() { cut -f4 "$QT_RUN/links.tsv" | base64 | tr -d '\n'; }
+
+qt_gh() {
+  local args=(-sS --max-time 30 -X "$1" "https://api.github.com$2"
+    -H "Authorization: Bearer $QT_SUB_TOKEN" -H 'Accept: application/vnd.github+json'
+    -H 'X-GitHub-Api-Version: 2022-11-28')
+  [ -n "${3:-}" ] && args+=(-H 'Content-Type: application/json' --data "$3")
+  curl "${args[@]}"
+}
+
+qt_sub_push() {
+  [ -n "${QT_SUB_TOKEN:-}" ] && [ -n "${QT_SUB_GIST:-}" ] && [ -s "$QT_RUN/links.tsv" ] || return 1
+  qt_gh PATCH "/gists/$QT_SUB_GIST" "$(jq -nc --arg c "$(qt_sub_body)" '{files: {"sub.txt": {content: $c}}}')" \
+    | jq -e '.id' >/dev/null 2>&1
+}
+
+qt_publish_sub() {
+  local sum sent="$QT_RUN/.published"
+  [ -n "${QT_SUB_TOKEN:-}" ] && [ -n "${QT_SUB_GIST:-}" ] && [ -s "$QT_RUN/links.tsv" ] || return 0
+  sum="$(cksum < "$QT_RUN/links.tsv")"
+  [ "$(cat "$sent" 2>/dev/null)" = "$sum" ] && return 0
+  [ -n "${QT_SUB_PID:-}" ] && kill -0 "$QT_SUB_PID" 2>/dev/null && return 0
+  (
+    if qt_sub_push; then
+      printf '%s' "$sum" > "$sent"
+      printf '%s sub: gist updated\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    else
+      printf '%s sub: gist update failed, retrying in 60s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    fi
+  ) &
+  QT_SUB_PID=$!
+}
+
+qt_announce_links() {
+  qt_publish_sub
+  qt_notify_links "$@"
 }
 
 qt_write_links() {

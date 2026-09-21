@@ -103,6 +103,24 @@ quicktunnel-cli uninstall
 
 Most commands need `sudo`: the config holds the client credential and is mode `600`.
 
+## Subscription link
+
+A stable URL that clients (v2rayN, v2rayNG, Hiddify, Streisand) poll, so a
+changed quick-mode hostname or a new exit reaches every device on its own.
+The links are kept in a secret GitHub gist; create a classic token with only
+the `gist` scope:
+
+```bash
+quicktunnel-cli sub github <token>   # creates the gist, prints the URL + QR
+quicktunnel-cli sub                  # show it again
+quicktunnel-cli sub push             # force a rewrite
+quicktunnel-cli sub off
+```
+
+The gist is rewritten (base64, one `vless://` per line) whenever the links
+change, retried every minute until it succeeds. Set a short auto-update
+interval in the client. The raw URL is CDN-cached for up to ~5 minutes.
+
 ## Telegram notifications
 
 Quick mode re-issues the hostname on every restart or reboot. To receive the
